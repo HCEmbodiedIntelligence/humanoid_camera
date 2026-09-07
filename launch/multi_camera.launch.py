@@ -13,6 +13,7 @@ from launch_ros.actions import Node
 def _parameters(camera):
     width, height, fps = (int(camera[key]) for key in ('width', 'height', 'fps'))
     device = str(camera['device_type']).lower()
+    depth_auto = bool(camera.get('depth_auto_exposure', True))
     params = {
         'device_type': str(camera['device_type']),
         'serial_no': str(camera['serial_no']),
@@ -21,15 +22,9 @@ def _parameters(camera):
         'enable_depth': True,
         'depth_module.depth_profile': f'{width},{height},{fps}',
         'depth_module.depth_format': str(camera.get('depth_format', 'Z16')),
-        'depth_module.enable_auto_exposure': bool(camera.get('depth_auto_exposure', True)),
-        'depth_module.exposure': int(camera.get('depth_exposure_us', 4500)),
-        'depth_module.gain': int(camera.get('depth_gain', 64)),
-        'depth_module.auto_exposure_limit': int(camera.get('depth_auto_exposure_limit_us', 4500)),
-        'depth_module.auto_gain_limit': int(camera.get('depth_auto_gain_limit', 64)),
-        'depth_module.auto_exposure_limit_toggle': True,
-        'depth_module.auto_gain_limit_toggle': True,
+        'depth_module.enable_auto_exposure': depth_auto,
         'depth_module.global_time_enabled': True,
-        'enable_sync': True,
+        'enable_sync': bool(camera.get('sync_rgb_depth', True)),
         'pointcloud.enable': bool(camera.get('pointcloud', False)),
         'pointcloud.stream_filter': 2,
         'pointcloud.stream_index_filter': 0,
@@ -40,20 +35,36 @@ def _parameters(camera):
         'publish_tf': True,
         'tf_prefix': str(camera['id']) + '_',
     }
+    if depth_auto:
+        params.update({
+            'depth_module.auto_exposure_limit': int(camera.get('depth_auto_exposure_limit_us', 4500)),
+            'depth_module.auto_gain_limit': int(camera.get('depth_auto_gain_limit', 64)),
+            'depth_module.auto_exposure_limit_toggle': True,
+            'depth_module.auto_gain_limit_toggle': True,
+        })
+    else:
+        params.update({
+            'depth_module.exposure': int(camera.get('depth_exposure_us', 4500)),
+            'depth_module.gain': int(camera.get('depth_gain', 64)),
+        })
     if device == 'd405':
         params.update({
             'depth_module.color_profile': f'{width},{height},{fps}',
             'depth_module.color_format': str(camera.get('color_format', 'RGB8')),
         })
     else:
+        color_auto = bool(camera.get('color_auto_exposure', False))
         params.update({
             'rgb_camera.color_profile': f'{width},{height},{fps}',
             'rgb_camera.color_format': str(camera.get('color_format', 'RGB8')),
-            'rgb_camera.enable_auto_exposure': bool(camera.get('color_auto_exposure', False)),
-            'rgb_camera.exposure': int(camera.get('color_exposure_us', 4500)),
-            'rgb_camera.gain': int(camera.get('color_gain', 64)),
+            'rgb_camera.enable_auto_exposure': color_auto,
             'rgb_camera.global_time_enabled': True,
         })
+        if not color_auto:
+            params.update({
+                'rgb_camera.exposure': int(camera.get('color_exposure_us', 4500)),
+                'rgb_camera.gain': int(camera.get('color_gain', 64)),
+            })
     params.update(camera.get('parameters', {}))
     # Identity and stream selection cannot be replaced by advanced parameters.
     params.update(device_type=str(camera['device_type']), serial_no=str(camera['serial_no']),
@@ -81,7 +92,7 @@ def _launch(context):
                             name='timestamp_adapter', namespace=namespace,
                             parameters=[{'source_id': ident, 'config_file': str(config_path),
                                          'driver_prefix': prefix}],
-                            condition=IfCondition(str(bool(camera.get('normalize_timestamps', True))).lower()),
+            condition=IfCondition(str(bool(camera.get('timestamp_alignment', camera.get('normalize_timestamps', True)))).lower()),
                             output='screen'))
     return actions
 
