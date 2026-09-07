@@ -1,0 +1,25 @@
+# Official realsense2_camera_node parameters. Auto mode is enabled from startup.
+/**:
+  ros__parameters:
+    device_type: d405
+    enable_color: true
+    enable_depth: true
+    depth_module.depth_profile: 640,480,30
+    depth_module.color_profile: 640,480,30
+    depth_module.color_format: RGB8
+    depth_module.depth_format: Z16
+    depth_module.enable_auto_exposure: true
+    depth_module.auto_exposure_limit: 4500
+    depth_module.auto_gain_limit: 64
+    depth_module.auto_exposure_limit_toggle: true
+    depth_module.auto_gain_limit_toggle: true
+    depth_module.global_time_enabled: true
+    enable_sync: true
+    pointcloud.enable: true
+    pointcloud.stream_filter: 2
+    pointcloud.stream_index_filter: 0
+    align_depth.enable: false
+    temporal_filter.enable: false
+    hdr_merge.enable: false
+    depth_module.hdr_enabled: false
+    publish_tf: true
