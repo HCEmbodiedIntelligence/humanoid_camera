@@ -4,6 +4,7 @@ import math
 import re
 from humanoid_manager.deployment import DeploymentError
 from humanoid_manager.plugin_metadata import validate_settings, resolved_document
+from .identity import normalize_camera_identity
 
 
 def validate_cameras(value):
@@ -12,10 +13,11 @@ def validate_cameras(value):
     # Optional providers describe legacy formats; other brands use the common contract.
     from .profiles import VALIDATORS
     groups, result, identifiers, topics = {}, [], set(), set()
-    for raw in value:
+    for index, raw in enumerate(value):
         if not isinstance(raw, dict):
             raise DeploymentError('每台相机配置必须是对象')
         camera = copy.deepcopy(raw)
+        ident = normalize_camera_identity(camera, index, identifiers)
         backend = camera.get('backend', 'realsense')  # Legacy documents omitted this field.
         if not isinstance(backend, str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,63}', backend):
             raise DeploymentError('无效相机 backend')
@@ -28,7 +30,6 @@ def validate_cameras(value):
             camera.setdefault('required', True)
             camera.setdefault('pointcloud', False)
             camera.setdefault('fps', 30)
-            ident = camera.get('id', '')
             for key, suffix in [('rgbd_topic', 'rgbd'), ('metadata_topic', 'metadata'),
                                 ('pointcloud_topic', 'points'), ('pointcloud_metadata_topic', 'points_metadata')]:
                 camera.setdefault(key, f'/{ident}/normalized/{suffix}')
@@ -41,10 +42,7 @@ def validate_cameras(value):
             old.clear()
             old.update(new)
     for camera in result:
-        ident = camera.get('id', '')
-        if not isinstance(ident, str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,63}', ident) or ident in identifiers:
-            raise DeploymentError('相机 ID 无效或重复')
-        identifiers.add(ident)
+        ident = camera['id']
         for key in ('enabled', 'required', 'pointcloud'):
             if type(camera[key]) is not bool:
                 raise DeploymentError(f'{ident}.{key} 必须为布尔值')

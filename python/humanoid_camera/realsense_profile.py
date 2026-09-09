@@ -4,6 +4,7 @@ import math
 import re
 from humanoid_manager.deployment import DeploymentError
 from humanoid_manager.configuration import validate_values
+from .identity import normalize_camera_identity
 
 def validate_cameras(value):
     """Validate robot-owned camera definitions without touching camera hardware."""
@@ -12,16 +13,11 @@ def validate_cameras(value):
     result, identifiers, endpoints, serials = [], set(), set(), set()
     ros_name = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
     ros_topic = re.compile(r"/(?:[A-Za-z_][A-Za-z0-9_]*)(?:/[A-Za-z_][A-Za-z0-9_]*)*")
-    for raw in value:
+    for index, raw in enumerate(value):
         if not isinstance(raw, dict):
             raise DeploymentError("每台相机配置必须是对象")
         camera = copy.deepcopy(raw)
-        ident = camera.get("id", "")
-        if not isinstance(ident, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", ident):
-            raise DeploymentError("相机 ID 需以小写字母开头，只允许小写字母、数字和下划线")
-        if ident in identifiers:
-            raise DeploymentError(f"相机 ID 重复: {ident}")
-        identifiers.add(ident)
+        ident = normalize_camera_identity(camera, index, identifiers)
         camera.setdefault("enabled", True)
         camera.setdefault("backend", "realsense")
         camera.setdefault("required", True)
