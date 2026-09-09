@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+"""Manually sample camera metadata and read parameters, then write an acceptance report."""
+import argparse
+import json
+import math
+import os
+from pathlib import Path
+import sys
+import time
+
+from humanoid_camera.health_check import CameraCheck, expected_parameters
+from humanoid_camera.health_report import assemble, console_report, write_report
+
+
+def stamp(header):
+    return header.stamp.sec * 1_000_000_000 + header.stamp.nanosec
+
+
+def run(cameras, args):
+    import rclpy
+    from rclpy.qos import qos_profile_sensor_data
+    from rcl_interfaces.srv import GetParameters
+    from realsense2_camera_msgs.msg import Metadata, RGBD
+    rclpy.init(args=[], domain_id=args.domain_id)
+    node = rclpy.create_node('humanoid_manual_camera_check_' + str(os.getpid()))
+    checks = [CameraCheck(camera, verify_images=args.verify_images, exercise_auto=args.exercise_auto,
+                          max_age_ms=args.max_age_ms) for camera in cameras]
+    parameters, clients, futures = {}, {}, {}
+    started = time.monotonic() + args.warmup
+    deadline = started + args.duration
+    last_progress = started
+    try:
+        for check in checks:
+            camera, ident = check.camera, check.camera['id']
+            prefix = '/' + camera['namespace'] + '/' + camera['camera_name']
+            names = list(expected_parameters(camera)) + ['use_sim_time']
+            clients[ident] = (node.create_client(GetParameters, prefix + '/get_parameters'), names)
+
+            def metadata(message, check=check, stream=None):
+                elapsed = time.monotonic() - started
+                if elapsed < 0: return
+                try:
+                    raw = json.loads(message.json_data)
+                    if not isinstance(raw, dict): raise ValueError('metadata must be an object')
+                    if stream:
+                        check.raw(stream, raw, stamp(message.header), node.get_clock().now().nanoseconds, elapsed)
+                    else:
+                        check.normalized(raw, stamp(message.header), elapsed)
+                except (ValueError, TypeError, KeyError, OverflowError):
+                    check.fail((stream or 'normalized') + ':无效metadata')
+
+            for stream, suffix in [('rgb', 'color/metadata'), ('depth', 'depth/metadata')]:
+                node.create_subscription(Metadata, prefix + '/' + suffix,
+                    lambda msg, stream=stream, cb=metadata: cb(msg, stream=stream), qos_profile_sensor_data)
+            node.create_subscription(Metadata, camera['metadata_topic'], metadata, qos_profile_sensor_data)
+            if args.verify_images:
+                def image(message, check=check):
+                    elapsed = time.monotonic() - started
+                    if elapsed >= 0: check.image(stamp(message.header), stamp(message.rgb.header), stamp(message.depth.header), elapsed)
+                node.create_subscription(RGBD, camera['rgbd_topic'], image, qos_profile_sensor_data)
+        print(f'已选择 {len(checks)} 台相机；等待 {args.warmup:g}s 后采样 {args.duration:g}s。仅订阅话题、读取参数。', flush=True)
+        if args.exercise_auto:
+            print('自动补偿测试：请在采样期间手动改变光照，再恢复，观察曝光或增益是否变化。', flush=True)
+        while time.monotonic() < deadline:
+            for ident, (client, names) in clients.items():
+                if ident not in futures and client.service_is_ready():
+                    request = GetParameters.Request(); request.names = names
+                    futures[ident] = client.call_async(request)
+                future = futures.get(ident)
+                if future is not None and future.done() and ident not in parameters:
+                    try:
+                        values = future.result().values
+                        fields = {1: 'bool_value', 2: 'integer_value', 3: 'double_value', 4: 'string_value'}
+                        parameters[ident] = {name: getattr(value, fields[value.type]) if value.type in fields else None
+                                             for name, value in zip(names, values)}
+                    except Exception:
+                        parameters[ident] = None
+            rclpy.spin_once(node, timeout_sec=min(.1, max(0, deadline - time.monotonic())))
+            now = time.monotonic()
+            if now >= last_progress + 5:
+                last_progress = now
+                print('采样 {:.0f}/{:.0f}s：{}'.format(now - started, args.duration, ' | '.join(
+                    f"{c.camera['id']} RGB={c.counts['rgb']} 深度={c.counts['depth']} 配对校验={c.counts['verified_pairs']}"
+                    for c in checks)), flush=True)
+        return assemble(checks, args.duration, parameters, verify_images=args.verify_images)
+    finally:
+        node.destroy_node(); rclpy.try_shutdown()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--config', required=True, type=Path, help='已部署的 cameras.yaml')
+    parser.add_argument('--camera', action='append', default=[], help='只验收指定 ID，可重复；默认全部启用的 RealSense')
+    parser.add_argument('--duration', type=float, default=30., help='采样秒数，默认30')
+    parser.add_argument('--warmup', type=float, default=3., help='开始采样前等待秒数')
+    parser.add_argument('--domain-id', type=int, default=int(os.environ.get('ROS_DOMAIN_ID', '0')))
+    parser.add_argument('--max-age-ms', type=float, default=500., help='采集到本检查器接收的最大间隔，非时钟精度')
+    parser.add_argument('--verify-images', action='store_true', help='额外订阅 RGBD 图像，核对 RGB/深度 Header，增加图像传输开销')
+    parser.add_argument('--exercise-auto', action='store_true', help='要求观察到自动曝光或增益变化；请手动改变光照')
+    parser.add_argument('--output', type=Path, default=Path('camera_checks'))
+    args = parser.parse_args()
+    if (not math.isfinite(args.duration) or not 1 <= args.duration <= 3600 or
+            not math.isfinite(args.warmup) or not 0 <= args.warmup <= 60 or
+            not math.isfinite(args.max_age_ms) or args.max_age_ms <= 0 or not 0 <= args.domain_id <= 232):
+        parser.error('无效采样时长、等待时间、延迟阈值或 domain_id')
+    try:
+        import yaml
+        from humanoid_camera.configuration import validate_cameras
+        from humanoid_manager.plugin_metadata import resolved_document
+        document = yaml.safe_load(args.config.expanduser().read_text())
+        if not isinstance(document, dict) or document.get('schema_version') != 1:
+            raise ValueError('配置必须包含 schema_version: 1 和 cameras 列表')
+        cameras = [resolved_document(c, c) for c in validate_cameras(document['cameras']) if c['enabled'] and c['backend'] == 'realsense']
+        if set(args.camera) - {c['id'] for c in cameras}:
+            raise ValueError('指定相机不存在、已禁用或不是 RealSense')
+        if args.camera: cameras = [c for c in cameras if c['id'] in args.camera]
+        if not cameras: raise ValueError('没有可验收的已启用 RealSense 相机')
+        report = run(cameras, args)
+        report['config_file'] = str(args.config.expanduser().resolve())
+        report['domain_id'] = args.domain_id
+        report['exercise_auto'] = args.exercise_auto
+        destination = write_report(report, args.output)
+        print(console_report(report))
+        print('报告：' + str(destination.resolve() / 'report.html'))
+        return {'PASS': 0, 'FAIL': 1, 'UNKNOWN': 2}[report['status']]
+    except KeyboardInterrupt:
+        print('验收已中断，未生成通过结论。', file=sys.stderr); return 130
+    except Exception as error:
+        print('无法完成验收：' + str(error), file=sys.stderr); return 2
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
