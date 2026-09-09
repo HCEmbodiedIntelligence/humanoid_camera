@@ -40,7 +40,11 @@ ros2 launch humanoid_camera d435.launch.py namespace:=right serial_no:=你的序
 ./src/humanoid_camera/start_cameras.sh ./src/humanoid_camera/config/three-camera.example.yaml
 ```
 
-`multi_camera.launch.py` 接受管理器部署在机器人内部配置目录中的 `cameras.yaml`。同时启用多台 RealSense 时每台必须填写唯一序列号。型号字段不会限制为 D405/D435；其他 RealSense 型号使用官方驱动的通用参数映射，设备不支持的能力需要在真机启动时处理。D435 彩色流默认使用 4500 μs 手动曝光；若在网页中启用彩色自动曝光，当前配置无法提供 5 ms 上限承诺。
+`multi_camera.launch.py` 接受管理器部署在机器人内部配置目录中的 `cameras.yaml`。同时启用多台 RealSense 时每台必须填写唯一序列号。型号字段不会限制为 D405/D435；其他 RealSense 型号使用官方驱动的通用参数映射，设备不支持的能力需要在真机启动时处理。D435 系列彩色流采用不超过 5 ms 的手动曝光，默认 4500 μs、增益 64。其原生 RGB 自动曝光无法设置这个上限，因此网页禁用该开关，加载旧版本时也关闭 RGB 自动曝光；深度自动曝光保持独立设置。没有新增软件自动曝光或图像提亮处理。
+
+页面和 `cameras.yaml` 的 `color_exposure_us` 使用微秒。D435 系列 RGB 的官方驱动参数 `rgb_camera.exposure` 使用 100 μs 单位，因此 4500 μs 转换为 `45`，5000 μs 转换为 `50`；不能把页面微秒值直接填入高级官方驱动参数。非整百微秒值向下取整。深度模块的曝光参数仍使用微秒。
+
+D435 的 RGB 曝光模式、曝光值和增益以上述专用字段为准，保存时移除对应的高级参数覆盖值。此修正仅在启动时下发相机参数，保留连续流的分辨率、配置帧率、QoS 和时间戳处理，不对已采集图像做亮度后处理。实际曝光和出帧情况仍需在真机验收中检查。
 
 单相机可用参数：`serial_no`、`params_file`、`camera_name`、`namespace`、`normalize_timestamps`。管理器的 ROS domain_id 必须与相机一致。
 

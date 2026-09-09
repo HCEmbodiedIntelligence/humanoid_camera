@@ -10,6 +10,7 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from humanoid_manager.plugin_metadata import resolved_document
+from humanoid_camera.exposure import D435_RGB_MODELS, rgb_exposure_parameter
 
 
 def _parameters(camera):
@@ -64,13 +65,19 @@ def _parameters(camera):
         })
         if not color_auto:
             params.update({
-                'rgb_camera.exposure': int(camera.get('color_exposure_us', 4500)),
+                'rgb_camera.exposure': rgb_exposure_parameter(device, camera.get('color_exposure_us', 4500)),
                 'rgb_camera.gain': int(camera.get('color_gain', 64)),
             })
     params.update(camera.get('parameters', {}))
     # Identity and stream selection cannot be replaced by advanced parameters.
     params.update(device_type=str(camera['device_type']), serial_no=str(camera['serial_no']),
                   camera_name=str(camera['camera_name']), enable_color=True, enable_depth=True)
+    if device in D435_RGB_MODELS:
+        params.update({
+            'rgb_camera.enable_auto_exposure': False,
+            'rgb_camera.exposure': rgb_exposure_parameter(device, camera.get('color_exposure_us', 4500)),
+            'rgb_camera.gain': int(camera.get('color_gain', 64)),
+        })
     return params
 
 

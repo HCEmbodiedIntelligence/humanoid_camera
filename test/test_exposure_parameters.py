@@ -1,0 +1,83 @@
+"""D435 exposure values must reach the vendor in UVC units, before streaming."""
+import importlib.util
+from pathlib import Path
+
+import pytest
+import yaml
+
+from humanoid_camera.configuration import validate_cameras
+from humanoid_camera.exposure import rgb_exposure_parameter
+from humanoid_camera.health_check import expected_parameters
+from humanoid_manager.deployment import DeploymentError
+
+
+@pytest.fixture
+def driver_parameters():
+    path = Path(__file__).resolve().parents[1] / 'launch/realsense_camera.launch.py'
+    spec = importlib.util.spec_from_file_location('exposure_launch_test', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module._parameters
+
+
+@pytest.mark.parametrize('model', ['d435', 'D435', 'd435i', 'd435f', 'd435if'])
+@pytest.mark.parametrize('microseconds,ticks', [(100, 1), (4500, 45), (4599, 45), (5000, 50)])
+def test_rgb_exposure_uses_uvc_units_without_rounding_above_limit(driver_parameters, model, microseconds, ticks):
+    camera = validate_cameras([{'id': 'head', 'device_type': model,
+        'color_exposure_us': microseconds}])[0]
+    params = driver_parameters(camera)
+    assert params['rgb_camera.exposure'] == ticks
+    assert ticks * 100 <= microseconds <= 5000
+    assert expected_parameters(camera)['rgb_camera.exposure'] == ticks
+    assert params['depth_module.auto_exposure_limit'] == 4500
+
+
+def test_legacy_auto_and_advanced_overrides_cannot_bypass_rgb_policy(driver_parameters):
+    camera = validate_cameras([{'id': 'head', 'device_type': 'd435', 'color_auto_exposure': True,
+        'color_gain': 72, 'parameters': {'rgb_camera.enable_auto_exposure': True,
+            'rgb_camera.exposure': 4500, 'rgb_camera.gain': 128, 'rgb_camera.brightness': 10}}])[0]
+    assert camera['color_auto_exposure'] is False
+    assert camera['parameters'] == {'rgb_camera.brightness': 10}
+    params = driver_parameters(camera)
+    assert params['rgb_camera.enable_auto_exposure'] is False
+    assert params['rgb_camera.exposure'] == 45
+    assert params['rgb_camera.gain'] == 72
+    assert params['rgb_camera.brightness'] == 10
+    assert params['depth_module.enable_auto_exposure'] is True
+
+
+@pytest.mark.parametrize('microseconds', [0, 99, 5001])
+def test_invalid_manual_duration_is_rejected_even_in_legacy_auto_configuration(microseconds):
+    with pytest.raises(DeploymentError, match='曝光|color_exposure_us'):
+        validate_cameras([{'id': 'head', 'device_type': 'd435', 'color_auto_exposure': True,
+                          'color_exposure_us': microseconds}])
+
+
+def test_d405_shared_exposure_stays_in_microseconds(driver_parameters):
+    camera = validate_cameras([{'id': 'left', 'device_type': 'd405',
+        'depth_auto_exposure': False, 'depth_exposure_us': 4500}])[0]
+    params = driver_parameters(camera)
+    assert params['depth_module.exposure'] == 4500
+    assert 'rgb_camera.exposure' not in params
+    assert rgb_exposure_parameter('d405', 4500) == 4500
+
+
+def test_manual_policy_preserves_video_profile_and_processing_parameters(driver_parameters):
+    camera = validate_cameras([{'id': 'head', 'device_type': 'd435', 'width': 1280,
+        'height': 720, 'fps': 15, 'align_depth': True, 'pointcloud': True,
+        'parameters': {'rgb_camera.color_qos': 'SENSOR_DATA'}}])[0]
+    params = driver_parameters(camera)
+    assert params['rgb_camera.color_profile'] == params['depth_module.depth_profile'] == '1280,720,15'
+    assert params['rgb_camera.color_qos'] == 'SENSOR_DATA'
+    assert params['enable_sync'] is True
+    assert params['align_depth.enable'] is True
+    assert params['pointcloud.enable'] is True
+    assert params['rgb_camera.global_time_enabled'] is True
+
+
+def test_standalone_d435_default_also_uses_uvc_ticks():
+    path = Path(__file__).resolve().parents[1] / 'config/d435-humble.yaml'
+    params = yaml.safe_load(path.read_text())['/**']['ros__parameters']
+    assert params['rgb_camera.exposure'] == 45
+    assert params['rgb_camera.enable_auto_exposure'] is False
+    assert params['depth_module.auto_exposure_limit'] == 4500

@@ -2,6 +2,7 @@
 from collections import Counter, OrderedDict, deque
 from decimal import Decimal
 import math
+from .exposure import rgb_exposure_parameter
 
 
 def finite(value):
@@ -41,7 +42,9 @@ def expected_parameters(camera):
                            prefix + '.auto_exposure_limit_toggle': True,
                            prefix + '.auto_gain_limit_toggle': True})
         elif not automatic:
-            result[prefix + '.exposure'] = camera[stem + '_exposure_us']
+            exposure = camera[stem + '_exposure_us']
+            result[prefix + '.exposure'] = (rgb_exposure_parameter(camera['device_type'], exposure)
+                                             if stem == 'color' else exposure)
             result[prefix + '.gain'] = camera[stem + '_gain']
     return result
 

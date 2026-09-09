@@ -5,6 +5,7 @@ import re
 from humanoid_manager.deployment import DeploymentError
 from humanoid_manager.configuration import validate_values
 from .identity import normalize_camera_identity
+from .exposure import D435_RGB_MODELS, rgb_exposure_parameter
 
 def validate_cameras(value):
     """Validate robot-owned camera definitions without touching camera hardware."""
@@ -90,6 +91,10 @@ def validate_cameras(value):
         for key in ("align_depth", "depth_auto_exposure", "color_auto_exposure"):
             if type(camera[key]) is not bool:
                 raise DeploymentError(f"{ident}.{key} 必须为布尔值")
+        # D435's native RGB AE has no exposure ceiling. Existing saved versions
+        # also use manual RGB exposure when loaded under this acquisition policy.
+        if camera['device_type'].lower() in D435_RGB_MODELS:
+            camera['color_auto_exposure'] = False
         for key, low, high in (("width", 1, 8192), ("height", 1, 8192), ("fps", 1, 240),
                                ("depth_exposure_us", 1, 5000), ("depth_gain", 0, 10000),
                                ("depth_auto_exposure_limit_us", 1, 5000), ("depth_auto_gain_limit", 1, 10000),
@@ -102,12 +107,20 @@ def validate_cameras(value):
             raise DeploymentError(f"{ident}: 深度曝光设置不能超过曝光要求上限")
         if camera["device_type"].lower() != "d405" and not camera["color_auto_exposure"] and camera["color_exposure_us"] > camera["max_actual_exposure_us"]:
             raise DeploymentError(f"{ident}: RGB 手动曝光不能超过曝光要求上限")
+        if not camera['color_auto_exposure']:
+            try:
+                rgb_exposure_parameter(camera['device_type'], camera['color_exposure_us'])
+            except ValueError as error:
+                raise DeploymentError(f'{ident}: {error}') from error
         for key in ("color_format", "depth_format"):
             if not isinstance(camera[key], str) or not re.fullmatch(r"[A-Za-z0-9_]{1,32}", camera[key]):
                 raise DeploymentError(f"{ident}.{key} 无效")
         if not isinstance(camera["parameters"], dict):
             raise DeploymentError(f"{ident}.parameters 必须为对象")
         validate_values(camera["parameters"], f"/cameras/{ident}/parameters")
+        if camera['device_type'].lower() in D435_RGB_MODELS:
+            for key in ('rgb_camera.enable_auto_exposure', 'rgb_camera.exposure', 'rgb_camera.gain'):
+                camera['parameters'].pop(key, None)
         result.append(camera)
     active_realsense = [x for x in result if x["backend"] == "realsense" and x["enabled"]]
     if len(active_realsense) > 1 and any(not x["serial_no"] for x in active_realsense):
