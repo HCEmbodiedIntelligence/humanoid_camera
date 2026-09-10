@@ -75,8 +75,32 @@ def test_process_collection_whitelists_environment_and_libraries(tmp_path):
     (target / 'fd').mkdir()
     logfile = tmp_path / 'robot.log'; logfile.write_text('driver output')
     (target / 'fd/1').symlink_to(logfile)
+    (target / 'fd/5').symlink_to('socket:[9999]')
     records, paths = collector.process_snapshot(proc)
     assert records[0]['environment'] == {'ROS_DOMAIN_ID': '14'}
     assert records[0]['loaded_camera_transport_libraries'] == ['/opt/lib/librealsense2.so']
     assert paths == {logfile}
+    assert records[0]['socket_inodes'] == [9999]
     assert 'do-not-collect' not in json.dumps(records)
+
+
+def test_udp_socket_receive_queue_and_drop_counts():
+    data = 'sl local rem st queues timer retr uid timeout inode ref pointer drops\n'
+    data += '1: 00000000:2A94 00000000:0000 07 00000000:00000100 00:00000000 00000000 1000 0 9999 2 0 123\n'
+    sockets = collector.udp_sockets(data)
+    assert sockets[9999]['drops'] == 123
+    assert sockets[9999]['receive_queue_bytes'] == 256
+
+
+def test_historical_logs_not_displaced_by_newer_cli_empty_logs(tmp_path):
+    root = tmp_path / 'logs'; root.mkdir()
+    old = root / 'original-camera.log'
+    old.write_text('[WARN] [1789018890.1] started\n[WARN] [1789018959.0] Frames Timeout\n')
+    os.utime(old, (1789018960, 1789018960))
+    for i in range(20):
+        (root / f'new-cli-{i}.log').write_text('')
+    (root / 'restarted-camera.log').write_text('[WARN] [1789020649.0] started\n')
+    result = collector.collect_logs([root], set(), 1789018800, tmp_path / 'collected', max_files=1, until=1789019000)
+    assert result['files'][0]['source'] == str(old)
+    assert result['files'][0]['overlaps_test_window'] is True
+    assert result['omitted_by_file_limit'] == 1

@@ -126,9 +126,22 @@ def counters_delta(before, after):
 def host_snapshot():
     return {'wall_time_ns': time.time_ns(), 'monotonic_sec': time.monotonic(),
             'files': {path: read_file(path) for path in
-                      ('/proc/net/snmp', '/proc/net/netstat', '/proc/net/dev',
+                      ('/proc/net/snmp', '/proc/net/netstat', '/proc/net/dev', '/proc/net/udp', '/proc/net/udp6',
                        '/proc/stat', '/proc/loadavg', '/proc/meminfo',
-                       '/proc/pressure/cpu', '/proc/pressure/io', '/proc/pressure/memory')}}
+                      '/proc/pressure/cpu', '/proc/pressure/io', '/proc/pressure/memory')}}
+
+
+def udp_sockets(text):
+    result = {}
+    for line in text.splitlines()[1:]:
+        columns = line.split()
+        try:
+            result[int(columns[9])] = {'local_address_hex': columns[1],
+                                       'receive_queue_bytes': int(columns[4].split(':')[1], 16),
+                                       'drops': int(columns[12])}
+        except (ValueError, IndexError):
+            continue
+    return result
 
 
 def process_snapshot(proc=Path('/proc')):
@@ -146,6 +159,15 @@ def process_snapshot(proc=Path('/proc')):
                     environ[key] = value
             item = {'pid': int(directory.name), 'argv': argv, 'environment': environ,
                     'stat': read_file(directory / 'stat'), 'status': read_file(directory / 'status')}
+            item['socket_inodes'] = []
+            try:
+                for fd_path in (directory / 'fd').iterdir():
+                    with suppress(OSError):
+                        match = re.fullmatch(r'socket:\[(\d+)\]', os.readlink(fd_path))
+                        if match:
+                            item['socket_inodes'].append(int(match[1]))
+            except OSError as error:
+                item['socket_error'] = str(error)
             for fd in ('1', '2'):
                 try:
                     path = (directory / 'fd' / fd).resolve(strict=True)
@@ -167,7 +189,17 @@ def process_snapshot(proc=Path('/proc')):
     return records, log_paths
 
 
-def collect_logs(roots, direct_paths, since, destination, max_files=12, limit=OUTPUT_LIMIT):
+def log_wall_range(path):
+    """Inspect a small head/tail, not an unbounded read of every candidate log."""
+    with path.open('rb') as stream:
+        data = stream.read(4096)
+        stream.seek(max(0, os.fstat(stream.fileno()).st_size - 4096))
+        data += stream.read(4096)
+    stamps = [float(x) for x in re.findall(rb'\[(\d{10}\.\d+)\]', data)]
+    return [min(stamps), max(stamps)] if stamps else None
+
+
+def collect_logs(roots, direct_paths, since, destination, max_files=12, limit=OUTPUT_LIMIT, until=None):
     """Keep bounded tails; report paths, truncation and permission failures."""
     candidates, errors = set(direct_paths), []
     for root in roots:
@@ -183,15 +215,16 @@ def collect_logs(roots, direct_paths, since, destination, max_files=12, limit=OU
     for path in candidates:
         try:
             stat = path.stat()
-            if path.is_file() and (path in direct_paths or stat.st_mtime >= since):
-                # Active camera stdout takes precedence over unrelated new logs.
-                selected.append((path in direct_paths, stat.st_mtime, str(path), path))
+            if path.is_file() and stat.st_size and (path in direct_paths or stat.st_mtime >= since):
+                times = log_wall_range(path)
+                overlaps = times is not None and until is not None and times[0] <= until and times[1] >= since
+                selected.append((path in direct_paths, overlaps, stat.st_mtime, str(path), path, times))
         except OSError as error:
             errors.append({'path': str(path), 'error': str(error)})
     selected.sort(reverse=True)
     records = []
     destination.mkdir()
-    for index, (_, _, _, path) in enumerate(selected[:max_files]):
+    for index, (_, overlaps, _, _, path, times) in enumerate(selected[:max_files]):
         try:
             with path.open('rb') as stream:
                 size = os.fstat(stream.fileno()).st_size
@@ -202,18 +235,20 @@ def collect_logs(roots, direct_paths, since, destination, max_files=12, limit=OU
             target.write_bytes(data)
             records.append({'source': str(path), 'file': 'logs/' + target.name,
                             'source_bytes': size, 'offset_bytes': offset,
+                            'observed_wall_range_sec': times, 'overlaps_test_window': overlaps,
                             'tail_only': offset > 0, 'sha256': hashlib.sha256(data).hexdigest()})
         except OSError as error:
             errors.append({'path': str(path), 'error': str(error)})
     return {'files': records, 'errors': errors, 'omitted_by_file_limit': max(0, len(selected) - max_files),
             'max_files': max_files, 'max_bytes_per_file': limit,
-            'selection': 'active camera stdout first, then recently modified logs; bounded tails may omit the original event'}
+            'selection': 'nonempty logs only; active stdout first, then logs overlapping the original test, then recent logs; bounded tails may omit events'}
 
 
 def command_plan(node, start, end):
     return [
         ('packages', ['dpkg-query', '-W', 'ros-humble-realsense2-*', 'ros-humble-librealsense2*', 'librealsense2*']),
         ('usb_tree', ['lsusb', '-t']),
+        ('udp_socket_memory', ['ss', '-uanmp']),
         ('kernel_test_window', ['journalctl', '-k', '--since=@' + str(int(start - 60)),
                                 '--until=@' + str(int(end + 60)), '--no-pager', '-o', 'short-unix']),
         ('kernel_current', ['journalctl', '-k', '--since=-5min', '--no-pager', '-o', 'short-unix']),
@@ -271,6 +306,15 @@ def main():
     print('诊断目录：' + str(directory.resolve()), flush=True)
     interrupted = False
     try:
+        print('被动采样 10 秒：此阶段不运行 ROS 查询，区分原有丢包与查询期间的发现流量。', flush=True)
+        time.sleep(10)
+        passive_after = host_snapshot()
+        manifest['passive_host_window'] = {
+            'after': passive_after, 'before_is_host_before': True,
+            'elapsed_sec': passive_after['monotonic_sec'] - before['monotonic_sec'],
+            'snmp_delta': counters_delta(
+                parse_snmp(before['files']['/proc/net/snmp'].get('text', '')),
+                parse_snmp(passive_after['files']['/proc/net/snmp'].get('text', '')))}
         for label, argv in command_plan(node, start, end):
             print('读取：' + label, flush=True)
             result, output = run_command(argv, env)
@@ -293,9 +337,18 @@ def main():
         parse_snmp(before['files']['/proc/net/snmp'].get('text', '')),
         parse_snmp(after['files']['/proc/net/snmp'].get('text', '')))
     manifest['processes'] = {'before': processes_before, 'after': processes_after}
+    before_sockets, after_sockets = {}, {}
+    for name in ('/proc/net/udp', '/proc/net/udp6'):
+        before_sockets.update(udp_sockets(before['files'][name].get('text', '')))
+        after_sockets.update(udp_sockets(after['files'][name].get('text', '')))
+    manifest['udp_socket_deltas'] = [
+        {'inode': inode, **data, 'drops_delta': data['drops'] - before_sockets[inode]['drops'],
+         'candidate_pids': [p['pid'] for p in processes_before + processes_after if inode in p.get('socket_inodes', [])]}
+        for inode, data in after_sockets.items()
+        if inode in before_sockets and data['drops'] >= before_sockets[inode]['drops']]
     roots = [Path(os.environ.get('ROS_LOG_DIR', str(Path.home() / '.ros/log'))),
              Path.home() / '.local/share/humanoid-manager/runtime_logs'] + [p.expanduser() for p in args.log_root]
-    manifest['logs'] = collect_logs(roots, active_logs | more_logs, start - 60, directory / 'logs')
+    manifest['logs'] = collect_logs(roots, active_logs | more_logs, start - 60, directory / 'logs', until=end + 60)
     manifest['interrupted'] = interrupted
     (directory / 'manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2))
     (directory / 'README.txt').write_text(
