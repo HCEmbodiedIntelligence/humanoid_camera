@@ -79,7 +79,7 @@ class Metric:
 
 class CameraCheck:
     def __init__(self, camera, *, verify_images=False, exercise_auto=False, max_age_ms=500., min_rate_ratio=.8,
-                 require_equal_exposure=False):
+                 require_equal_exposure=False, save_frame_trace=False):
         self.camera = camera
         self.verify_images, self.exercise_auto = verify_images, exercise_auto
         self.require_equal_exposure = require_equal_exposure
@@ -93,6 +93,8 @@ class CameraCheck:
         self.pipeline_samples = {}
         self.last_epoch = None
         self.trace = deque(maxlen=10000)
+        from .frame_trace import FrameTrace
+        self.frame_trace = FrameTrace(camera['id']) if save_frame_trace else None
 
     def metric(self, name, value):
         self.metrics.setdefault(name, Metric()).add(value)
@@ -117,6 +119,8 @@ class CameraCheck:
             collection.popitem(last=False)
 
     def raw(self, stream, raw, header_ns, receive_ns, elapsed):
+        if self.frame_trace is not None:
+            self.frame_trace.raw(stream, raw, header_ns, receive_ns, elapsed)
         self.counts[stream] += 1; self.last_received[stream] = elapsed
         # Keep bounded original evidence so unit and timestamp errors can be
         # investigated from the report without another image subscription.
@@ -182,7 +186,9 @@ class CameraCheck:
         except (KeyError, ValueError, TypeError, OverflowError):
             self.fail(stream + ':缺少GLOBAL_TIME曝光中点映射依据')
 
-    def normalized(self, data, header_ns, elapsed):
+    def normalized(self, data, header_ns, elapsed, receive_ns=None):
+        if self.frame_trace is not None:
+            self.frame_trace.normalized(data, header_ns, receive_ns, elapsed)
         self.counts['normalized'] += 1; self.last_received['normalized'] = elapsed
         try:
             if data['source_id'] != self.camera['id']:
@@ -200,7 +206,9 @@ class CameraCheck:
         except (KeyError, ValueError, TypeError, OverflowError):
             self.fail('标准化元数据格式不完整')
 
-    def image(self, header_ns, rgb_ns, depth_ns, elapsed):
+    def image(self, header_ns, rgb_ns, depth_ns, elapsed, receive_ns=None):
+        if self.frame_trace is not None:
+            self.frame_trace.image(header_ns, rgb_ns, depth_ns, receive_ns, elapsed)
         self.counts['images'] += 1; self.last_received['images'] = elapsed
         self.image_pending.setdefault(header_ns, {})['image'] = (rgb_ns, depth_ns)
         self._join_image(header_ns); self._bounded(self.image_pending)
@@ -299,6 +307,7 @@ class CameraCheck:
                 'metrics': {k: v.report() for k, v in self.metrics.items()},
                 'failures': failures, 'unknowns': unknowns, 'parameters': parameters,
                 'raw_metadata_samples': self.raw_samples,
+                'frame_trace': self.frame_trace.report() if self.frame_trace is not None else None,
                 'pipeline_diagnostics': self.pipeline_samples,
                 'pipeline_window': summarize_window(self.pipeline_samples.get('first'), self.pipeline_samples.get('last')),
                 'metadata_exposure_scale_us': {stream: metadata_exposure_scale_us(self.camera['device_type'], stream)

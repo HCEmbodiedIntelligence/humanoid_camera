@@ -25,6 +25,23 @@ def finding_value(camera, message, count):
     return str(count)
 
 
+def frame_trace_lines(camera):
+    trace = camera.get('frame_trace')
+    if trace is None:
+        return []
+    lines = [f"逐帧接收记录：{len(trace['events'])} 条；超出上限丢弃 {trace['discarded_events']} 条。"]
+    if trace['classification_status'] != 'observed_callbacks_only':
+        lines.append('逐帧缺口定位未完成：' + trace['classification_status'])
+    for stream, evidence in trace['gap_evidence'].items():
+        if evidence.get('raw_gap_count', 0):
+            lines.append(f"{stream}元数据帧号缺口 {evidence['raw_gap_count']} 个："
+                         f"其中 {evidence['present_in_normalized_images']} 个仍对应已收到的标准化 RGBD 图像；"
+                         f"其余 {evidence['unresolved_gap_count']} 个尚未定位。")
+        elif evidence['status'] != 'observed_callbacks_only':
+            lines.append(stream + '逐帧缺口定位未完成：' + evidence['status'])
+    return lines
+
+
 def console_report(report):
     lines = [f"相机手动验收：{report['status']}  |  来源：{report['data_origin']}  |  {report['duration_sec']:.1f}s",
              '相机 | 状态 | RGB/深度元数据 Hz | RGB/深度最大曝光 us | RGB-D曝光时长差 max us | 中点差 p95/max ms | 换算残差 max ns']
@@ -68,6 +85,7 @@ def console_report(report):
                          + '；丢弃时缺少：' + json.dumps(pipeline['missing_when_discarded'], ensure_ascii=False))
         else:
             lines.append('  适配节点诊断：未取得完整窗口；需运行新版适配节点，不能据接收帧率确定丢帧位置。')
+        lines.extend('  ' + line for line in frame_trace_lines(camera))
         for key, label in [('failures', '失败'), ('unknowns', '未确认')]:
             for message, count in camera[key].items():
                 lines.append(f'  [{label}] {message}: {finding_value(camera, message, count)}')
@@ -111,6 +129,9 @@ def write_report(report, root, *, destination=None):
     if report.get('receiver_qos'):
         parts.append('<details><summary>检查器订阅 QoS</summary><pre>'
                      + escape(json.dumps(report['receiver_qos'], ensure_ascii=False, indent=2)) + '</pre></details>')
+    if any(camera.get('frame_trace') is not None for camera in report['cameras']):
+        parts.append('<p><a href="frame_events.csv">下载逐帧接收记录 CSV</a>：记录原始元数据、标准化元数据和 RGBD 图像回调。'
+                     '可核对元数据帧号缺口是否仍有对应图像；未定位不等于相机漏拍，现有验收判定不变。</p>')
     labels = {'rgb_exposure_us': 'RGB 实际曝光（μs）', 'depth_exposure_us': '深度实际曝光（μs）',
               'rgb_depth_exposure_difference_us': 'RGB/深度实际曝光时长差（μs）',
               'rgb_gain': 'RGB 增益', 'depth_gain': '深度增益',
@@ -128,6 +149,7 @@ def write_report(report, root, *, destination=None):
             parts.append(f"<p>实际 RGBD 图像接收：{images} 对 / {images / report['duration_sec']:.2f} Hz。</p>")
         parts.append('<p>曝光时长一致性：' + ('要求每对实际曝光时长差为 0 μs。' if camera.get('require_equal_exposure')
                                             else '仅统计差值，未要求相等。') + '</p>')
+        parts.extend('<p>' + escape(line) + '</p>' for line in frame_trace_lines(camera))
         parts.append('<table><tr><th>观测项</th><th>样本数</th><th>最小</th><th>平均</th><th>P95</th><th>最大</th></tr>')
         for key, label in labels.items():
             metric = camera['metrics'].get(key, {})
@@ -195,6 +217,18 @@ def write_report(report, root, *, destination=None):
         writer.writeheader()
         for camera in report['cameras']:
             writer.writerows({'camera_id': camera['id'], **row} for row in camera['trace'])
+    if any(camera.get('frame_trace') is not None for camera in report['cameras']):
+        fields = ['camera_id', 'kind', 'elapsed_sec', 'receive_ns', 'header_ns', 'frame_number',
+                  'sdk_frame_timestamp_ms', 'sdk_arrival_ms', 'backend_timestamp_ms',
+                  'raw_actual_exposure', 'gain_level', 'rgb_frame_number', 'depth_frame_number',
+                  'rgb_header_ns', 'depth_header_ns', 'rgb_sdk_arrival_ms', 'depth_sdk_arrival_ms',
+                  'adapter_group_ns', 'clock_id', 'clock_epoch']
+        with (path / 'frame_events.csv').open('w', newline='', encoding='utf-8') as output:
+            writer = csv.DictWriter(output, fieldnames=fields)
+            writer.writeheader()
+            for camera in report['cameras']:
+                writer.writerows({'camera_id': camera['id'], **event}
+                                 for event in (camera.get('frame_trace') or {}).get('events', []))
     return path
 
 

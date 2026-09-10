@@ -150,6 +150,9 @@ def test_command_keeps_received_photos_and_report_on_failure_or_interruption(tmp
     subscriptions, state = {}, {'elapsed': 0., 'calls': 0, 'destroyed': False}
 
     class Node:
+        def get_clock(self):
+            return Obj(now=lambda: Obj(nanoseconds=timestamp + int(state['elapsed'] * 1_000_000_000)))
+
         def create_client(self, kind, topic):
             return Obj(service_is_ready=lambda: False)
 

@@ -32,7 +32,8 @@ def run(cameras, args):
     node = rclpy.create_node('humanoid_manual_camera_check_' + str(os.getpid()))
     checks = [CameraCheck(camera, verify_images=args.verify_images, exercise_auto=args.exercise_auto,
                           max_age_ms=args.max_age_ms,
-                          require_equal_exposure=getattr(args, 'require_equal_exposure', False)) for camera in cameras]
+                          require_equal_exposure=getattr(args, 'require_equal_exposure', False),
+                          save_frame_trace=getattr(args, 'save_evidence', False)) for camera in cameras]
     parameters, clients, futures = {}, {}, {}
     capture_subscriptions=[]
     next_transport_refresh=time.monotonic()+1.
@@ -58,7 +59,8 @@ def run(cameras, args):
                     if stream:
                         check.raw(stream, raw, stamp(message.header), node.get_clock().now().nanoseconds, elapsed)
                     else:
-                        check.normalized(raw, stamp(message.header), elapsed)
+                        check.normalized(raw, stamp(message.header), elapsed,
+                                         node.get_clock().now().nanoseconds)
                         if evidence:
                             evidence.metadata_received(check.camera, raw, stamp(message.header))
                 except (ValueError, TypeError, KeyError, OverflowError):
@@ -81,7 +83,8 @@ def run(cameras, args):
                 def image(message, check=check):
                     elapsed = time.monotonic() - started
                     if elapsed >= 0:
-                        check.image(stamp(message.header), stamp(message.rgb.header), stamp(message.depth.header), elapsed)
+                        check.image(stamp(message.header), stamp(message.rgb.header), stamp(message.depth.header), elapsed,
+                                    node.get_clock().now().nanoseconds)
                         if evidence:
                             evidence.image_received(check.camera, message, elapsed)
                 capture_subscriptions.append(CaptureSubscription(node, RGBD, camera['rgbd_topic'], image))
@@ -204,6 +207,7 @@ def main():
         print('报告：' + str(destination.resolve() / 'report.html'))
         if args.save_evidence:
             print(f"已保存 {len(report['evidence']['saved'])} 对照片证据；写入错误 {len(report['evidence']['errors'])} 项。")
+            print('逐帧接收记录：' + str(destination.resolve() / 'frame_events.csv'))
             print('汇报压缩包：' + str(bundle_report(destination).resolve()))
         if report.get('interrupted'):
             print('采样被中断；已保留照片和部分结果，不能作为完整验收。')
