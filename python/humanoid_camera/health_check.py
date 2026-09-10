@@ -7,6 +7,7 @@ from .exposure import rgb_exposure_parameter, metadata_exposure_us, metadata_exp
 from .depth_processing import DEPTH_FILTER_PARAMETERS
 from .pipeline_diagnostics import summarize_window
 from .driver_qos import driver_qos_parameters
+from .driver_streams import infrared_parameters
 
 
 def finite(value):
@@ -36,6 +37,7 @@ def expected_parameters(camera):
     """Public requested settings; advanced overrides are deliberately detectable."""
     result = {'enable_sync': camera['sync_rgb_depth'], 'enable_color': True, 'enable_depth': True,
               'depth_module.global_time_enabled': True, **DEPTH_FILTER_PARAMETERS,
+              **infrared_parameters(camera),
               **driver_qos_parameters(camera.get('parameters', {}))}
     for prefix, stem in [('depth_module', 'depth')] + ([] if camera['device_type'].lower() == 'd405' else [('rgb_camera', 'color')]):
         automatic = camera[stem + '_auto_exposure']

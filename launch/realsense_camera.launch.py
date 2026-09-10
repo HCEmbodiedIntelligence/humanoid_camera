@@ -13,6 +13,7 @@ from humanoid_manager.plugin_metadata import resolved_document
 from humanoid_camera.exposure import D435_RGB_MODELS, rgb_exposure_parameter, override_driver_parameters
 from humanoid_camera.depth_processing import acquisition_filters
 from humanoid_camera.driver_qos import driver_qos_parameters
+from humanoid_camera.driver_streams import infrared_parameters
 
 
 def _parameters(camera):
@@ -72,6 +73,7 @@ def _parameters(camera):
             })
     params.update(camera.get('parameters', {}))
     params.update(driver_qos_parameters(camera.get('parameters', {})))
+    params.update(infrared_parameters(camera))
     # Identity and stream selection cannot be replaced by advanced parameters.
     params.update(device_type=str(camera['device_type']), serial_no=str(camera['serial_no']),
                   camera_name=str(camera['camera_name']), enable_color=True, enable_depth=True)

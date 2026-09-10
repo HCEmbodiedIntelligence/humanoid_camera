@@ -7,6 +7,8 @@
     device_type: d435
     enable_color: true
     enable_depth: true
+    enable_infra1: false
+    enable_infra2: false
     depth_module.depth_profile: 640,480,30
     depth_module.depth_format: Z16
     depth_qos: DEFAULT
