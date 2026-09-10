@@ -16,6 +16,7 @@ from sensor_msgs.msg import Image, PointCloud2, CameraInfo
 from realsense2_camera_msgs.msg import Metadata, RGBD
 from std_msgs.msg import String
 from humanoid_camera.pipeline_diagnostics import PipelineDiagnostics
+from humanoid_camera.transport import CaptureSubscription, capture_qos
 
 
 def ns(header):
@@ -54,37 +55,73 @@ class TimestampAdapter(Node):
         self.pending=OrderedDict();self.lineage=OrderedDict();self.infos={}
         self.bytes=0;self.seq=0;self.epoch=0;self.last_clock=None;self.last_sensor=None
         self.clock_id='realsense:'+uuid.uuid4().hex
+        self.cloud_pending=OrderedDict();self.cloud_bytes=0
+        self.cloud_limit=min(self.limit,16*1024*1024)
+        self.cloud_subscription=None
+        self.capture_subscriptions={}
         self.diagnostics=PipelineDiagnostics(self.source,self.clock_id)
         self.diagnostics_pub=self.create_publisher(String,'normalized/diagnostics',qos_profile_sensor_data)
-        self.pair_pub=self.create_publisher(RGBD,'normalized/rgbd',qos_profile_sensor_data)
-        self.meta_pub=self.create_publisher(Metadata,'normalized/metadata',qos_profile_sensor_data)
-        self.cloud_pub=self.create_publisher(PointCloud2,'normalized/points',qos_profile_sensor_data)
-        self.cloud_meta=self.create_publisher(Metadata,'normalized/points_metadata',qos_profile_sensor_data)
+        self.pair_pub=self.create_publisher(RGBD,'normalized/rgbd',capture_qos())
+        self.meta_pub=self.create_publisher(Metadata,'normalized/metadata',capture_qos(30))
+        self.cloud_pub=self.create_publisher(PointCloud2,'normalized/points',capture_qos(2))
+        self.cloud_meta=self.create_publisher(Metadata,'normalized/points_metadata',capture_qos(30))
         for name,topic in [('rgb','color/image_raw'),('depth','depth/image_rect_raw'),
-                           ('rgb_meta','color/metadata'),('depth_meta','depth/metadata'),('cloud','depth/color/points')]:
-            typ=Metadata if name.endswith('_meta') else PointCloud2 if name=='cloud' else Image
-            self.create_subscription(typ,self.base+'/'+topic,lambda msg,name=name:self.receive(name,msg),qos_profile_sensor_data)
+                           ('rgb_meta','color/metadata'),('depth_meta','depth/metadata')]:
+            typ=Metadata if name.endswith('_meta') else Image
+            self.capture_subscriptions[name]=CaptureSubscription(self,typ,self.base+'/'+topic,
+                lambda msg,name=name:self.receive(name,msg),depth=30 if name.endswith('_meta') else 10)
         for name,topic in [('rgb','color/camera_info'),('depth','depth/camera_info')]:
             self.create_subscription(CameraInfo,self.base+'/'+topic,lambda msg,name=name:self.infos.update({name:msg}),qos_profile_sensor_data)
         self.create_timer(.1,self.observe_clock)
         self.create_timer(1.,self.publish_diagnostics)
 
     def publish_diagnostics(self):
+        for subscription in self.capture_subscriptions.values():subscription.refresh()
+        self.update_cloud_subscription()
         data=self.diagnostics.snapshot(pending_groups=len(self.pending),pending_bytes=self.bytes,clock_epoch=self.epoch)
+        data.update(input_qos={name:sub.state() for name,sub in self.capture_subscriptions.items()},
+            output_qos='RELIABLE',cloud_forwarding=self.cloud_subscription is not None,
+            cloud_pending_groups=len(self.cloud_pending),cloud_pending_bytes=self.cloud_bytes)
+        from rclpy.utilities import get_rmw_implementation_identifier
+        data['rmw_implementation']=get_rmw_implementation_identifier()
         self.diagnostics_pub.publish(String(data=json.dumps(data)))
+
+    def update_cloud_subscription(self):
+        wanted=self.cloud_pub.get_subscription_count()>0 or self.cloud_meta.get_subscription_count()>0
+        if wanted and self.cloud_subscription is None:
+            self.cloud_subscription=CaptureSubscription(self,PointCloud2,self.base+'/depth/color/points',
+                lambda msg:self.receive('cloud',msg),depth=2)
+        elif not wanted and self.cloud_subscription is not None:
+            self.cloud_subscription.close();self.cloud_subscription=None
+            self.cloud_pending.clear();self.cloud_bytes=0
+        if self.cloud_subscription:self.cloud_subscription.refresh()
+
+    def receive_cloud(self,msg):
+        key=ns(msg.header)
+        if key in self.lineage:
+            self.publish_cloud(msg,self.lineage[key]);return
+        size=len(msg.data)
+        if size>self.cloud_limit:
+            self.diagnostics.discard('cloud_oversize',{'cloud':msg});return
+        if key in self.cloud_pending:return
+        while self.cloud_pending and (self.cloud_bytes+size>self.cloud_limit or len(self.cloud_pending)>=4):
+            _,old=self.cloud_pending.popitem(last=False);self.cloud_bytes-=len(old.data)
+            self.diagnostics.discard('cloud_buffer_limit',{'cloud':old})
+        self.cloud_pending[key]=msg;self.cloud_bytes+=size
 
     def observe_clock(self):
         now=(self.get_clock().now().nanoseconds,time.monotonic_ns())
         if self.last_clock and abs((now[0]-self.last_clock[0])-(now[1]-self.last_clock[1]))>5_000_000:
             for parts,_ in self.pending.values():self.diagnostics.discard('clock_reset',parts)
             self.epoch+=1;self.pending.clear();self.lineage.clear();self.bytes=0
+            self.cloud_pending.clear();self.cloud_bytes=0
         self.last_clock=now
 
     def receive(self,name,msg):
         self.diagnostics.receive(name)
+        if name=='cloud':
+            self.receive_cloud(msg);return
         key=ns(msg.header)
-        if name=='cloud' and key in self.lineage:
-            self.publish_cloud(msg,self.lineage[key]);return
         size=len(msg.json_data.encode()) if name.endswith('_meta') else len(msg.data)
         if size>self.limit:
             self.diagnostics.discard('oversize_'+name,{name:msg});return
@@ -106,6 +143,7 @@ class TimestampAdapter(Node):
         sensor=int(raw['rgb']['sensor_timestamp'])
         if self.last_sensor is not None and sensor<self.last_sensor-250_000 and self.last_sensor-sensor<2**31:
             self.epoch+=1;self.lineage.clear()
+            self.cloud_pending.clear();self.cloud_bytes=0
         self.last_sensor=sensor
         self.seq+=1
         receive_ros=self.get_clock().now().nanoseconds
@@ -144,7 +182,9 @@ class TimestampAdapter(Node):
         self.diagnostics.published+=1
         self.lineage[key]=d
         while len(self.lineage)>256:self.lineage.popitem(last=False)
-        if 'cloud' in parts:self.publish_cloud(parts['cloud'],d)
+        if key in self.cloud_pending:
+            cloud=self.cloud_pending.pop(key);self.cloud_bytes-=len(cloud.data)
+            self.publish_cloud(cloud,d)
 
     def publish_cloud(self,cloud,pair):
         d={k:v for k,v in pair.items() if k not in {'rgb','depth'}}

@@ -54,6 +54,7 @@ def test_adapter_reports_missing_rgb_on_eviction_and_preserves_complete_pair():
     stats = PipelineDiagnostics('front', 'test-instance')
     images, metadata = [], []
     node = Obj(source='front', limit=64*1024*1024, pending=OrderedDict(), lineage=OrderedDict(), infos={},
+               cloud_pending=OrderedDict(), cloud_bytes=0, cloud_limit=16*1024*1024,
                bytes=0, seq=0, epoch=0, last_sensor=None, clock_id='test-instance', config_id='TEST_ONLY',
                diagnostics=stats, get_clock=lambda: Obj(now=lambda: Obj(nanoseconds=1_780_000_000_100_000_000)),
                pair_pub=Obj(publish=images.append), meta_pub=Obj(publish=metadata.append))
@@ -93,3 +94,24 @@ def test_adapter_reports_missing_rgb_on_eviction_and_preserves_complete_pair():
     before = dict(stats.missing)
     stats.discard('buffer_limit', {'cloud': object()})
     assert dict(stats.missing) == before
+
+
+def test_cloud_backlog_cannot_evict_incomplete_rgbd_groups():
+    pytest.importorskip('rclpy')
+    from sensor_msgs.msg import PointCloud2
+    from std_msgs.msg import Header
+    path = Path(__file__).resolve().parents[1] / 'scripts/timestamp_adapter.py'
+    spec = importlib.util.spec_from_file_location('cloud_isolation_adapter', path)
+    adapter = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(adapter)
+    stats = PipelineDiagnostics('front', 'test-instance')
+    node = Obj(lineage={}, cloud_pending=OrderedDict(), cloud_bytes=0, cloud_limit=16,
+               pending=OrderedDict({1: ({'rgb_meta': object()}, 10)}), bytes=10, diagnostics=stats)
+    pending = list(node.pending.items())
+    for i in range(20):
+        h = Header(); h.stamp.nanosec = i
+        adapter.TimestampAdapter.receive_cloud(node, PointCloud2(header=h, data=bytes(8)))
+    assert list(node.pending.items()) == pending and node.bytes == 10
+    assert len(node.cloud_pending) == 2 and node.cloud_bytes == 16
+    assert stats.discarded['cloud_buffer_limit'] == 18
+    assert not stats.missing

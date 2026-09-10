@@ -22,6 +22,7 @@ def run(cameras, args):
     from rcl_interfaces.srv import GetParameters
     from realsense2_camera_msgs.msg import Metadata, RGBD
     from std_msgs.msg import String
+    from humanoid_camera.transport import CaptureSubscription
     evidence = None
     if getattr(args, 'save_evidence', False):
         from humanoid_camera.evidence import EvidenceRecorder
@@ -32,6 +33,8 @@ def run(cameras, args):
                           max_age_ms=args.max_age_ms,
                           require_equal_exposure=getattr(args, 'require_equal_exposure', False)) for camera in cameras]
     parameters, clients, futures = {}, {}, {}
+    capture_subscriptions=[]
+    next_transport_refresh=time.monotonic()+1.
     started = time.monotonic() + args.warmup
     deadline = started + args.duration
     last_progress = started
@@ -61,9 +64,9 @@ def run(cameras, args):
                     check.fail((stream or 'normalized') + ':无效metadata')
 
             for stream, suffix in [('rgb', 'color/metadata'), ('depth', 'depth/metadata')]:
-                node.create_subscription(Metadata, prefix + '/' + suffix,
-                    lambda msg, stream=stream, cb=metadata: cb(msg, stream=stream), qos_profile_sensor_data)
-            node.create_subscription(Metadata, camera['metadata_topic'], metadata, qos_profile_sensor_data)
+                capture_subscriptions.append(CaptureSubscription(node, Metadata, prefix + '/' + suffix,
+                    lambda msg, stream=stream, cb=metadata: cb(msg, stream=stream), depth=30))
+            capture_subscriptions.append(CaptureSubscription(node, Metadata, camera['metadata_topic'], metadata, depth=30))
             def diagnostics(message, check=check):
                 if time.monotonic() < started:
                     return
@@ -80,7 +83,7 @@ def run(cameras, args):
                         check.image(stamp(message.header), stamp(message.rgb.header), stamp(message.depth.header), elapsed)
                         if evidence:
                             evidence.image_received(check.camera, message, elapsed)
-                node.create_subscription(RGBD, camera['rgbd_topic'], image, qos_profile_sensor_data)
+                capture_subscriptions.append(CaptureSubscription(node, RGBD, camera['rgbd_topic'], image))
         print(f'已选择 {len(checks)} 台相机；等待 {args.warmup:g}s 后采样 {args.duration:g}s。仅订阅话题、读取参数。', flush=True)
         if getattr(args, 'require_equal_exposure', False):
             print('要求每对 RGB/深度曝光换算到μs后完全相等；曝光中点差按配置阈值独立检查。', flush=True)
@@ -102,6 +105,9 @@ def run(cameras, args):
                         parameters[ident] = None
             rclpy.spin_once(node, timeout_sec=min(.1, max(0, deadline - time.monotonic())))
             now = time.monotonic()
+            if now>=next_transport_refresh:
+                for subscription in capture_subscriptions:subscription.refresh()
+                next_transport_refresh=now+1.
             if evidence:
                 evidence.flush(now - started)
             if now >= last_progress + 5:
@@ -120,6 +126,7 @@ def run(cameras, args):
         node.destroy_node(); rclpy.try_shutdown()
     report = assemble(checks, sampled_duration, parameters, verify_images=args.verify_images)
     report['interrupted'] = interrupted
+    report['receiver_qos']={subscription.topic:subscription.state() for subscription in capture_subscriptions}
     if interrupted:
         for camera in report['cameras']:
             camera['unknowns']['采样被中断，未完成预定时长'] = 1

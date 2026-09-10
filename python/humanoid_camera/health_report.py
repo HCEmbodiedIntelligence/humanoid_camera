@@ -36,6 +36,11 @@ def console_report(report):
                          f"末帧原始曝光={last['raw'].get('actual_exposure')}；"
                          f"sensor−hw偏移 max={value(metrics.get(stream + '_sensor_minus_hw_us'))} μs")
         pipeline = camera.get('pipeline_window')
+        pipeline_last = camera.get('pipeline_diagnostics', {}).get('last', {})
+        if pipeline_last.get('input_qos'):
+            lines.append('  适配节点接收QoS：' + ' / '.join(name + '=' + qos['requested_reliability']
+                         for name, qos in pipeline_last['input_qos'].items())
+                         + '；点云转发=' + str(pipeline_last.get('cloud_forwarding')))
         if pipeline:
             rates = pipeline['received_hz']
             lines.append(f"  适配节点 {pipeline['duration_sec']:.1f}s 内："
@@ -50,6 +55,9 @@ def console_report(report):
             for message, count in camera[key].items():
                 lines.append(f'  [{label}] {message}: {count}')
     lines.append('PASS 仅表示本次观测项满足阈值；SDK 映射的绝对误差、物理同步精度未独立测量。')
+    if report.get('receiver_qos'):
+        lines.append('检查器接收QoS：' + '；'.join(topic + '=' + qos['requested_reliability']
+                     for topic, qos in report['receiver_qos'].items()))
     return '\n'.join(lines)
 
 
@@ -83,6 +91,9 @@ def write_report(report, root, *, destination=None):
         parts.append('<p class="UNKNOWN"><strong>这是合成数据示例，不能用作真实设备验收记录。</strong></p>')
     if report.get('runtime_error'):
         parts.append('<p class="FAIL">采样错误：' + escape(report['runtime_error']) + '</p>')
+    if report.get('receiver_qos'):
+        parts.append('<details><summary>检查器订阅 QoS</summary><pre>'
+                     + escape(json.dumps(report['receiver_qos'], ensure_ascii=False, indent=2)) + '</pre></details>')
     labels = {'rgb_exposure_us': 'RGB 实际曝光（μs）', 'depth_exposure_us': '深度实际曝光（μs）',
               'rgb_depth_exposure_difference_us': 'RGB/深度实际曝光时长差（μs）',
               'rgb_gain': 'RGB 增益', 'depth_gain': '深度增益',

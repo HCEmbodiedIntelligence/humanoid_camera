@@ -143,6 +143,10 @@ def test_command_keeps_received_photos_and_report_on_failure_or_interruption(tmp
 
         def create_subscription(self, kind, topic, callback, qos):
             subscriptions[topic] = callback
+            return Obj(topic_name=topic)
+
+        def get_publishers_info_by_topic(self, topic):
+            return []
 
         def destroy_node(self):
             state['destroyed'] = True
