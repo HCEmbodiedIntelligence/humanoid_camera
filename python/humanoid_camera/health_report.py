@@ -14,13 +14,16 @@ def value(metric, key='max'):
 
 def console_report(report):
     lines = [f"相机手动验收：{report['status']}  |  来源：{report['data_origin']}  |  {report['duration_sec']:.1f}s",
-             '相机 | 状态 | RGB/深度 Hz | RGB/深度最大曝光 us | 中点差 p95/max ms | 换算残差 max ns']
+             '相机 | 状态 | RGB/深度 Hz | RGB/深度最大曝光 us | RGB-D曝光时长差 max us | 中点差 p95/max ms | 换算残差 max ns']
     for camera in report['cameras']:
         metrics, fps = camera['metrics'], camera['fps']
         skew = metrics.get('rgb_depth_midpoint_skew_ms')
         lines.append(f"{camera['id']} | {camera['status']} | {fps['rgb']:.1f}/{fps['depth']:.1f} | "
                      f"{value(metrics.get('rgb_exposure_us'))}/{value(metrics.get('depth_exposure_us'))} | "
+                     f"{value(metrics.get('rgb_depth_exposure_difference_us'))} | "
                      f"{value(skew, 'p95_recent')}/{value(skew)} | {value(metrics.get('mapping_residual_ns'))}")
+        lines.append('  曝光时长一致性：' + ('要求每对差值为0 μs' if camera.get('require_equal_exposure')
+                                         else '仅报告差值，未要求相等'))
         for key, label in [('failures', '失败'), ('unknowns', '未确认')]:
             for message, count in camera[key].items():
                 lines.append(f'  [{label}] {message}: {count}')
@@ -43,6 +46,7 @@ def write_report(report, root):
     if report['data_origin'] != 'ROS 实际话题':
         parts.append('<p class="UNKNOWN"><strong>这是合成数据示例，不能用作真实设备验收记录。</strong></p>')
     labels = {'rgb_exposure_us': 'RGB 实际曝光（μs）', 'depth_exposure_us': '深度实际曝光（μs）',
+              'rgb_depth_exposure_difference_us': 'RGB/深度实际曝光时长差（μs）',
               'rgb_gain': 'RGB 增益', 'depth_gain': '深度增益',
               'rgb_depth_midpoint_skew_ms': 'RGB/深度曝光中点差（ms）',
               'mapping_residual_ns': '发布值与原始 metadata 换算残差（ns）',
@@ -53,6 +57,8 @@ def write_report(report, root):
                      f"<p>型号 {escape(camera['device_type'])} · 配置序列号 {escape(camera['serial_no'])}</p>"
                      f"<p>观测帧率 RGB/深度/标准化：{camera['fps']['rgb']:.2f} / {camera['fps']['depth']:.2f} / {camera['fps']['normalized']:.2f} Hz</p>"
                      f"<p>阈值：实际曝光 ≤ {camera['limits']['exposure_us']} μs；中点差 ≤ {camera['limits']['midpoint_skew_ms']} ms。</p>")
+        parts.append('<p>曝光时长一致性：' + ('要求每对实际曝光时长差为 0 μs。' if camera.get('require_equal_exposure')
+                                            else '仅统计差值，未要求相等。') + '</p>')
         parts.append('<table><tr><th>观测项</th><th>样本数</th><th>最小</th><th>平均</th><th>P95</th><th>最大</th></tr>')
         for key, label in labels.items():
             metric = camera['metrics'].get(key, {})
@@ -69,7 +75,8 @@ def write_report(report, root):
     parts.append('<p>图像验证：' + ('已启用' if report['verify_images'] else '未启用，仅验证元数据；完整验收请加 --verify-images') + '</p></html>')
     (path / 'report.html').write_text('\n'.join(parts), encoding='utf-8')
     with (path / 'samples.csv').open('w', newline='', encoding='utf-8') as output:
-        writer = csv.DictWriter(output, fieldnames=['camera_id', 'rgb_time_ns', 'depth_time_ns', 'skew_ms', 'rgb_exposure_us', 'depth_exposure_us'])
+        writer = csv.DictWriter(output, fieldnames=['camera_id', 'rgb_time_ns', 'depth_time_ns', 'skew_ms',
+                                                   'rgb_exposure_us', 'depth_exposure_us', 'exposure_difference_us'])
         writer.writeheader()
         for camera in report['cameras']:
             writer.writerows({'camera_id': camera['id'], **row} for row in camera['trace'])

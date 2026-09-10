@@ -38,6 +38,25 @@ ros2 run humanoid_camera check_cameras.py \
 至少观察到该自动曝光流的曝光或增益变化，才把“响应已观察到”算作满足；光照不变导致没有变化时为 UNKNOWN，
 不直接判定固件故障。该检查不替代人眼对图像亮度、噪声和清晰度的判断。
 
+要同时验收 RGB/深度的曝光中点对齐和实际曝光时长相等，加 `--require-equal-exposure`：
+
+```bash
+ros2 run humanoid_camera check_cameras.py \
+  --config /实际插件目录/robots/机器人ID/cameras.yaml \
+  --duration 60 --verify-images --require-equal-exposure \
+  --output ./camera_checks
+```
+
+这两个要求独立判断：曝光中点差遵循 `rgbd_max_midpoint_skew_ms`（默认 1 ms），
+每对 RGB/深度的 `actual_exposure` 差必须为 0 μs。只比较两路最大值或平均值不能证明逐帧相等。
+未提供有效曝光元数据时不能通过；不加该选项仍统计时长差，但报告明确不要求相等。
+相机时长的量化差异也会报告不一致，不会静默放宽容差。
+
+D435 默认 RGB 手动曝光、深度自动曝光，这种配置不能保证两路时长相等。
+需要相同曝光设定时，在网页关闭 D435 的深度自动曝光，将 RGB 和深度手动曝光都设为 4500 μs，
+保存并重启相机后再验收（驱动分别接收 RGB 45、深度 4500）。D405 的共享模块可继续使用自动曝光，
+但同样以每对实际元数据为准。相同曝光设定不会使两路物理曝光自动同步，也不会强行改成相同时间戳。
+
 ## 结果
 
 每次运行创建单独的结果目录，不覆盖上次结果：
@@ -53,6 +72,7 @@ ros2 run humanoid_camera check_cameras.py \
 | --- | --- |
 | 曝光/增益设置生效 | 驱动 GetParameters 与保存配置比较，再检查原始帧 metadata 的 actual_exposure、gain_level、auto_exposure。 |
 | 实际曝光上限 | 每个观测帧不超过配置 max_actual_exposure_us；深度自动模式还检查自动曝光及增益限制。 |
+| RGB/深度曝光时长一致性 | 逐对统计 actual_exposure 的绝对差；加 --require-equal-exposure 后，差值非零为 FAIL，缺少有效数据不能通过。 |
 | RGB/深度时间差 | 分别换算曝光中点，比较绝对差是否超过 rgbd_max_midpoint_skew_ms，默认 1 ms。 |
 | 软件时间戳换算 | 使用原始 metadata 独立重算，核对标准化输出与来源帧号；换算差超过 1000 ns 为 FAIL。 |
 | 图像 Header | 使用 --verify-images 时订阅 RGBD，分别核对 RGB/depth Header 和中点元数据；会增加图像传输开销。 |

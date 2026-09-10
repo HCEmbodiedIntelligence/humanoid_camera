@@ -52,6 +52,9 @@ D435 的 RGB 曝光模式、曝光值和增益以上述专用字段为准，保�
 
 [手动验收脚本与结果说明](docs/manual_acceptance.md)：按需运行 `ros2 run humanoid_camera check_cameras.py`，
 检查实际曝光、自动补偿响应、RGB/深度中点差和时间戳换算，输出终端、HTML、JSON 和 CSV 报告。
+加 `--require-equal-exposure` 后，另要求每对 RGB/深度的实际曝光时长差为 0 μs；
+曝光时长相等与曝光中点对齐分别验收。D435 若要求相同曝光设定，需将深度也改为手动曝光并与 RGB 设置一致，
+保存、重启后再以实际帧元数据验证。验收脚本只读取数据，不改变相机参数和连续采集链路。
 
 通用 `multi_camera.launch.py` 现在执行设备配置的 `startup`，其他品牌也随整机启动。
 例如 `backend: vendor_camera` 可同时声明 `instance_parameters`、ROS launch 步骤、

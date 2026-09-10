@@ -24,7 +24,8 @@ def run(cameras, args):
     rclpy.init(args=[], domain_id=args.domain_id)
     node = rclpy.create_node('humanoid_manual_camera_check_' + str(os.getpid()))
     checks = [CameraCheck(camera, verify_images=args.verify_images, exercise_auto=args.exercise_auto,
-                          max_age_ms=args.max_age_ms) for camera in cameras]
+                          max_age_ms=args.max_age_ms,
+                          require_equal_exposure=getattr(args, 'require_equal_exposure', False)) for camera in cameras]
     parameters, clients, futures = {}, {}, {}
     started = time.monotonic() + args.warmup
     deadline = started + args.duration
@@ -59,6 +60,8 @@ def run(cameras, args):
                     if elapsed >= 0: check.image(stamp(message.header), stamp(message.rgb.header), stamp(message.depth.header), elapsed)
                 node.create_subscription(RGBD, camera['rgbd_topic'], image, qos_profile_sensor_data)
         print(f'已选择 {len(checks)} 台相机；等待 {args.warmup:g}s 后采样 {args.duration:g}s。仅订阅话题、读取参数。', flush=True)
+        if getattr(args, 'require_equal_exposure', False):
+            print('要求每对 RGB/深度的 actual_exposure 完全相等；曝光中点差按配置阈值独立检查。', flush=True)
         if args.exercise_auto:
             print('自动补偿测试：请在采样期间手动改变光照，再恢复，观察曝光或增益是否变化。', flush=True)
         while time.monotonic() < deadline:
@@ -97,6 +100,8 @@ def main():
     parser.add_argument('--max-age-ms', type=float, default=500., help='采集到本检查器接收的最大间隔，非时钟精度')
     parser.add_argument('--verify-images', action='store_true', help='额外订阅 RGBD 图像，核对 RGB/深度 Header，增加图像传输开销')
     parser.add_argument('--exercise-auto', action='store_true', help='要求观察到自动曝光或增益变化；请手动改变光照')
+    parser.add_argument('--require-equal-exposure', action='store_true',
+                        help='要求每对 RGB/深度的实际曝光时长相等（差值0 μs）；独立于曝光中点对齐检查')
     parser.add_argument('--output', type=Path, default=Path('camera_checks'))
     args = parser.parse_args()
     if (not math.isfinite(args.duration) or not 1 <= args.duration <= 3600 or
@@ -119,6 +124,7 @@ def main():
         report['config_file'] = str(args.config.expanduser().resolve())
         report['domain_id'] = args.domain_id
         report['exercise_auto'] = args.exercise_auto
+        report['require_equal_exposure'] = args.require_equal_exposure
         destination = write_report(report, args.output)
         print(console_report(report))
         print('报告：' + str(destination.resolve() / 'report.html'))

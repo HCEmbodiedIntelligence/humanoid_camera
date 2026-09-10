@@ -70,9 +70,11 @@ class Metric:
 
 
 class CameraCheck:
-    def __init__(self, camera, *, verify_images=False, exercise_auto=False, max_age_ms=500., min_rate_ratio=.8):
+    def __init__(self, camera, *, verify_images=False, exercise_auto=False, max_age_ms=500., min_rate_ratio=.8,
+                 require_equal_exposure=False):
         self.camera = camera
         self.verify_images, self.exercise_auto = verify_images, exercise_auto
+        self.require_equal_exposure = require_equal_exposure
         self.max_age_ms, self.min_rate_ratio = max_age_ms, min_rate_ratio
         self.counts, self.failures, self.unknowns = Counter(), Counter(), Counter()
         self.metrics = {}
@@ -186,9 +188,27 @@ class CameraCheck:
             self.counts['raw_pairs'] += 1; group['paired'] = True
             if skew > self.camera['rgbd_max_midpoint_skew_ms']:
                 self.fail('RGB与深度曝光中点差超过配置阈值')
+            exposures = {}
+            for stream in ('rgb', 'depth'):
+                try:
+                    value = finite(group[stream]['raw']['actual_exposure'])
+                    if value <= 0:
+                        raise ValueError('invalid actual exposure')
+                    exposures[stream] = value
+                except (KeyError, ValueError, TypeError, OverflowError):
+                    exposures[stream] = None
+            exposure_difference = None
+            if all(value is not None for value in exposures.values()):
+                exposure_difference = abs(exposures['rgb'] - exposures['depth'])
+                self.metric('rgb_depth_exposure_difference_us', exposure_difference)
+                self.counts['exposure_pairs'] += 1
+                if self.require_equal_exposure and exposure_difference != 0:
+                    self.fail('RGB与深度实际曝光时长不一致')
+            elif self.require_equal_exposure:
+                self.unknowns['RGB-D配对缺少有效实际曝光，无法确认时长一致'] += 1
             self.trace.append({'rgb_time_ns': group['rgb']['capture'], 'depth_time_ns': group['depth']['capture'],
-                               'skew_ms': skew, 'rgb_exposure_us': group['rgb']['raw'].get('actual_exposure'),
-                               'depth_exposure_us': group['depth']['raw'].get('actual_exposure')})
+                               'skew_ms': skew, 'rgb_exposure_us': exposures['rgb'],
+                               'depth_exposure_us': exposures['depth'], 'exposure_difference_us': exposure_difference})
         if 'normalized' not in group: return
         try:
             for stream in ('rgb', 'depth'):
@@ -241,7 +261,9 @@ class CameraCheck:
                 'counts': dict(self.counts), 'fps': {s: self.counts[s] / duration for s in ('rgb', 'depth', 'normalized')},
                 'metrics': {k: v.report() for k, v in self.metrics.items()},
                 'failures': failures, 'unknowns': unknowns, 'parameters': parameters,
+                'require_equal_exposure': self.require_equal_exposure,
                 'limits': {'exposure_us': self.camera['max_actual_exposure_us'],
+                           'rgb_depth_exposure_difference_us': 0 if self.require_equal_exposure else None,
                            'midpoint_skew_ms': self.camera['rgbd_max_midpoint_skew_ms'],
                            'receive_age_ms': self.max_age_ms},
                 'physical_clock_accuracy_verified': False, 'trace': list(self.trace)}
