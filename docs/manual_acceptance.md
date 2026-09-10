@@ -130,6 +130,31 @@ RGB 与深度取自同一条 RGBD 消息，保留各自时间戳。只有照片�
 
 ## 定位图像接收不足
 
+如果报告显示深度图像和深度元数据同时中断，先收集驱动、USB 与主机传输证据。
+保持相机运行，在相机电脑上执行下面的独立只读脚本。它可直接从源码运行，无需重新编译或重启相机：
+
+```bash
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+python3 src/humanoid_camera/scripts/collect_camera_diagnostics.py \
+  --report ./camera_checks/实际测试目录/report.json \
+  --camera camera_hand --output ./camera_diagnostics
+```
+
+脚本从报告读取 ROS domain_id（也可用 `--domain-id` 指定），读取节点、端点 QoS、驱动全部参数、
+设备信息、USB 拓扑、相机进程的有限环境与实际加载的传输库、主机网络计数和相关日志。
+不订阅图像、不打开 SDK 设备、不改相机参数、不启动或停止相机；单条命令最多等待 8 秒。
+默认驱动节点为 `/<camera>/camera`，自定义命名请传 `--node /实际命名空间/实际节点名`。
+完成后打印诊断 ZIP 路径，命令失败或权限不足也会记录，不能据此认为没有故障。
+
+原验收的采样时间从“接收时间减去采样经过时间”还原，用于查询当时的内核日志。
+其他 ROS/USB/进程状态与至少 10 秒内的主机网络增量均来自**本次诊断时刻**，不能混同为历史状态。
+网络计数覆盖整台主机，并非相机专属丢包计数。默认读取 `~/.ros/log`（或 `ROS_LOG_DIR`）、
+`~/.local/share/humanoid-manager/runtime_logs` 和当前相机进程的日志文件，优先保留运行中驱动的日志；
+自定义目录可重复传 `--log-root /实际日志目录`。最多保存 12 个日志尾部、每个 1 MiB，
+`manifest.json` 标明截断、遗漏与错误；有限尾部可能不包含原测试事件。
+报告文件、日志与系统诊断打包保存，原来的照片证据包仍单独保留。
+
 新版 `timestamp_adapter.py` 每秒发布 `/<namespace>/normalized/diagnostics`（`std_msgs/msg/String`）。
 验收脚本自动记录首尾诊断快照，在节点自己的单调时钟窗口内计算 RGB/深度图像、RGB/深度元数据接收速率和成组发布速率。
 还记录缓存淘汰数量，以及淘汰时缺少哪种输入。节点重启后开始新的窗口，不把两个进程的计数相减。
