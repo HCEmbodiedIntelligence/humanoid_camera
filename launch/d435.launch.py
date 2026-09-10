@@ -26,6 +26,7 @@ def generate_launch_description():
         Node(package='realsense2_camera', executable='realsense2_camera_node',
              name=LaunchConfiguration('camera_name'), namespace=LaunchConfiguration('namespace'),
              parameters=[LaunchConfiguration('params_file'), {
+                 'temporal_filter.enable': False,
                  'camera_name': ParameterValue(LaunchConfiguration('camera_name'), value_type=str),
                  'serial_no': ParameterValue(LaunchConfiguration('serial_no'), value_type=str)}], output='screen'),
     ])

@@ -37,7 +37,7 @@ def test_legacy_auto_and_advanced_overrides_cannot_bypass_rgb_policy(driver_para
         'color_gain': 72, 'parameters': {'rgb_camera.enable_auto_exposure': True,
             'rgb_camera.exposure': 4500, 'rgb_camera.gain': 128, 'rgb_camera.brightness': 10}}])[0]
     assert camera['color_auto_exposure'] is False
-    assert camera['parameters'] == {'rgb_camera.brightness': 10}
+    assert camera['parameters'] == {'rgb_camera.brightness': 10, 'temporal_filter.enable': False}
     params = driver_parameters(camera)
     assert params['rgb_camera.enable_auto_exposure'] is False
     assert params['rgb_camera.exposure'] == 45

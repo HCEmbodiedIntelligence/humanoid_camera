@@ -31,7 +31,7 @@ def mapped_midpoint_ns(raw):
 def expected_parameters(camera):
     """Public requested settings; advanced overrides are deliberately detectable."""
     result = {'enable_sync': camera['sync_rgb_depth'], 'enable_color': True, 'enable_depth': True,
-              'depth_module.global_time_enabled': True}
+              'depth_module.global_time_enabled': True, 'temporal_filter.enable': False}
     for prefix, stem in [('depth_module', 'depth')] + ([] if camera['device_type'].lower() == 'd405' else [('rgb_camera', 'color')]):
         automatic = camera[stem + '_auto_exposure']
         result[prefix + '.enable_auto_exposure'] = automatic

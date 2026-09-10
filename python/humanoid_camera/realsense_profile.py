@@ -6,6 +6,7 @@ from humanoid_manager.deployment import DeploymentError
 from humanoid_manager.configuration import validate_values
 from .identity import normalize_camera_identity
 from .exposure import D435_RGB_MODELS, rgb_exposure_parameter
+from .depth_processing import without_temporal_filter
 
 def validate_cameras(value):
     """Validate robot-owned camera definitions without touching camera hardware."""
@@ -118,6 +119,7 @@ def validate_cameras(value):
         if not isinstance(camera["parameters"], dict):
             raise DeploymentError(f"{ident}.parameters 必须为对象")
         validate_values(camera["parameters"], f"/cameras/{ident}/parameters")
+        camera['parameters'] = without_temporal_filter(camera['parameters'])
         if camera['device_type'].lower() in D435_RGB_MODELS:
             for key in ('rgb_camera.enable_auto_exposure', 'rgb_camera.exposure', 'rgb_camera.gain'):
                 camera['parameters'].pop(key, None)

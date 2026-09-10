@@ -48,6 +48,11 @@ D435 的 RGB 曝光模式、曝光值和增益以上述专用字段为准，保�
 
 单相机可用参数：`serial_no`、`params_file`、`camera_name`、`namespace`、`normalize_timestamps`。管理器的 ROS domain_id 必须与相机一致。
 
+本包的 RealSense 启动入口统一设置 `temporal_filter.enable: false`，关闭深度时间滤波。
+管理器保存、加载配置时会将对应高级参数归一化为关闭，包含点分键和嵌套字典两种写法；
+单台 D405/D435 启动也会覆盖自定义 `params_file` 中的开启值。更新代码并重新启动相机后生效。
+验收脚本回读该参数，若为 true 则报告失败，缺少回读值则报告无法确认。
+
 [时间戳源码核查、转换公式与输出话题](docs/d405-humble-implementation.md)。
 
 [手动验收脚本与结果说明](docs/manual_acceptance.md)：按需运行 `ros2 run humanoid_camera check_cameras.py`，

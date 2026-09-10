@@ -11,6 +11,7 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from humanoid_manager.plugin_metadata import resolved_document
 from humanoid_camera.exposure import D435_RGB_MODELS, rgb_exposure_parameter
+from humanoid_camera.depth_processing import without_temporal_filter
 
 
 def _parameters(camera):
@@ -78,7 +79,8 @@ def _parameters(camera):
             'rgb_camera.exposure': rgb_exposure_parameter(device, camera.get('color_exposure_us', 4500)),
             'rgb_camera.gain': int(camera.get('color_gain', 64)),
         })
-    return params
+    # Apply after advanced parameters, including nested ROS parameter mappings.
+    return without_temporal_filter(params)
 
 
 def _launch(context):

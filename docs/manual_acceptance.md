@@ -70,6 +70,7 @@ D435 默认 RGB 手动曝光、深度自动曝光，这种配置不能保证两�
 
 | 检查 | 依据 |
 | --- | --- |
+| 深度时间滤波关闭 | 驱动 GetParameters 回读 temporal_filter.enable，必须为 false；为 true 则 FAIL，未返回则 UNKNOWN。 |
 | 曝光/增益设置生效 | 驱动 GetParameters 与保存配置比较，再检查原始帧 metadata 的 actual_exposure、gain_level、auto_exposure。 |
 | 实际曝光上限 | 每个观测帧不超过配置 max_actual_exposure_us；深度自动模式还检查自动曝光及增益限制。 |
 | RGB/深度曝光时长一致性 | 逐对统计 actual_exposure 的绝对差；加 --require-equal-exposure 后，差值非零为 FAIL，缺少有效数据不能通过。 |
