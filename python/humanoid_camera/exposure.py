@@ -1,7 +1,28 @@
 """Conversions between configured microseconds and vendor parameter units."""
+import math
 
 D435_RGB_MODELS = frozenset({'d435', 'd435i', 'd435f', 'd435if'})
 D435_EXPOSURE_US = 3900
+
+
+def metadata_exposure_scale_us(device_type, stream):
+    """D435 USB RGB metadata returns md_rgb_control.manual_exp in UVC ticks.
+
+    librealsense ds_color_common::register_metadata forwards this field without
+    unit conversion (verified in 2.55.1, 2.56.5 and 2.58.3). This is separate
+    from the microsecond depth metadata and from all timestamp fields.
+    """
+    return 100 if device_type.lower() in D435_RGB_MODELS and stream == 'rgb' else 1
+
+
+def metadata_exposure_us(device_type, stream, raw):
+    value = raw['actual_exposure']
+    if isinstance(value, bool):
+        raise ValueError('invalid actual_exposure')
+    value = float(value)
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError('invalid actual_exposure')
+    return value * metadata_exposure_scale_us(device_type, stream)
 
 
 def override_driver_parameters(parameters, overrides):

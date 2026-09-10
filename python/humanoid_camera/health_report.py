@@ -5,6 +5,7 @@ import html
 import json
 from pathlib import Path
 import uuid
+import zipfile
 
 
 def value(metric, key='max'):
@@ -15,6 +16,8 @@ def value(metric, key='max'):
 def console_report(report):
     lines = [f"相机手动验收：{report['status']}  |  来源：{report['data_origin']}  |  {report['duration_sec']:.1f}s",
              '相机 | 状态 | RGB/深度 Hz | RGB/深度最大曝光 us | RGB-D曝光时长差 max us | 中点差 p95/max ms | 换算残差 max ns']
+    if report.get('runtime_error'):
+        lines.append('采样错误：' + report['runtime_error'])
     for camera in report['cameras']:
         metrics, fps = camera['metrics'], camera['fps']
         skew = metrics.get('rgb_depth_midpoint_skew_ms')
@@ -24,6 +27,14 @@ def console_report(report):
                      f"{value(skew, 'p95_recent')}/{value(skew)} | {value(metrics.get('mapping_residual_ns'))}")
         lines.append('  曝光时长一致性：' + ('要求每对差值为0 μs' if camera.get('require_equal_exposure')
                                          else '仅报告差值，未要求相等'))
+        scales = camera.get('metadata_exposure_scale_us', {})
+        if scales.get('rgb') == 100:
+            lines.append('  D435 RGB曝光元数据：原始值×100换算为μs；时间戳字段不作此换算。')
+        for stream, samples in camera.get('raw_metadata_samples', {}).items():
+            first, last = samples['first'], samples['last']
+            lines.append(f"  {stream}元数据：首帧在采样开始后{first['elapsed_sec']:.3f}s；"
+                         f"末帧原始曝光={last['raw'].get('actual_exposure')}；"
+                         f"sensor−hw偏移 max={value(metrics.get(stream + '_sensor_minus_hw_us'))} μs")
         for key, label in [('failures', '失败'), ('unknowns', '未确认')]:
             for message, count in camera[key].items():
                 lines.append(f'  [{label}] {message}: {count}')
@@ -31,10 +42,24 @@ def console_report(report):
     return '\n'.join(lines)
 
 
-def write_report(report, root):
+def create_report_directory(root):
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     path = Path(root).expanduser() / (stamp + '-' + uuid.uuid4().hex[:6])
     path.mkdir(parents=True)
+    return path
+
+
+def bundle_report(path):
+    target = path.with_suffix('.zip')
+    with zipfile.ZipFile(target, 'x', compression=zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
+        for source in sorted(path.rglob('*')):
+            if source.is_file():
+                archive.write(source, Path(path.name) / source.relative_to(path))
+    return target
+
+
+def write_report(report, root, *, destination=None):
+    path = Path(destination) if destination is not None else create_report_directory(root)
     (path / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False), encoding='utf-8')
     (path / 'summary.txt').write_text(console_report(report) + '\n', encoding='utf-8')
     escape = lambda item: html.escape(str(item))
@@ -45,6 +70,8 @@ def write_report(report, root):
         '<p>这里核查本次采样的曝光与时间戳行为。换算残差是软件一致性检查，不是物理时钟误差。绝对同步精度尚未独立测量。</p>']
     if report['data_origin'] != 'ROS 实际话题':
         parts.append('<p class="UNKNOWN"><strong>这是合成数据示例，不能用作真实设备验收记录。</strong></p>')
+    if report.get('runtime_error'):
+        parts.append('<p class="FAIL">采样错误：' + escape(report['runtime_error']) + '</p>')
     labels = {'rgb_exposure_us': 'RGB 实际曝光（μs）', 'depth_exposure_us': '深度实际曝光（μs）',
               'rgb_depth_exposure_difference_us': 'RGB/深度实际曝光时长差（μs）',
               'rgb_gain': 'RGB 增益', 'depth_gain': '深度增益',
@@ -71,7 +98,36 @@ def write_report(report, root):
                 for message, count in camera[key].items(): parts.append(f'<li>{escape(message)}：{escape(count)}</li>')
                 parts.append('</ul>')
         parts.append('<details><summary>计数及驱动参数回读</summary><pre>' + escape(json.dumps(
-            {'counts': camera['counts'], 'parameters': camera['parameters']}, ensure_ascii=False, indent=2)) + '</pre></details></section>')
+            {'counts': camera['counts'], 'parameters': camera['parameters'],
+             'metadata_exposure_scale_us': camera.get('metadata_exposure_scale_us'),
+             'raw_metadata_samples': camera.get('raw_metadata_samples')}, ensure_ascii=False, indent=2)) + '</pre></details></section>')
+    evidence = report.get('evidence', {})
+    if evidence.get('enabled'):
+        parts.append('<section><h2>真实图像抽样证据</h2><p>RGB 为无损 PNG；深度数值 PNG 原样保存接收到的16位数值（包含当前驱动滤波结果）。'
+                     '深度预览仅为显示拉伸，数值范围按原始像素计数，不表示已标定的米制距离。照片取自同一条 RGBD 消息；'
+                     '曝光与增益仅在来源元数据逐帧匹配时展示。单张照片不能证明连续帧率或物理同步精度。</p>')
+        if not evidence.get('saved'):
+            parts.append('<p class="FAIL">未保存到照片证据，请查看接收计数和错误；本报告不能充当有图像证据的验收。</p>')
+        for error in evidence.get('errors', []):
+            parts.append('<p class="FAIL">' + escape(error) + '</p>')
+        for item in evidence.get('saved', []):
+            files, observations = item['files'], item['observations']
+            parts.append(f"<h3>{escape(item['camera_id'])} · 样本 {item['sample_index']} · 采样后 {item['elapsed_sec']:.2f}s</h3>")
+            parts.append('<p>元数据匹配：' + ('已匹配' if item['metadata_status'] == 'matched' else '未确认，曝光与增益未知') + '</p>')
+            parts.append('<div style="display:flex;gap:16px;flex-wrap:wrap">')
+            for key, label in [('rgb', 'RGB 原分辨率 PNG'), ('depth_preview', '深度显示预览')]:
+                if key in files:
+                    url = escape(files[key])
+                    parts.append(f'<figure style="margin:0;max-width:46%"><a href="{url}"><img src="{url}" style="width:100%" alt="{label}"></a><figcaption>{label}</figcaption></figure>')
+            parts.append('</div><table><tr><th>流</th><th>来源帧号</th><th>图像时间戳 ns</th><th>曝光 μs</th><th>增益</th></tr>')
+            for stream in ('rgb', 'depth'):
+                row = observations[stream]
+                parts.append('<tr><td>' + stream + '</td>' + ''.join('<td>' + escape(row.get(key)) + '</td>'
+                             for key in ('frame_number', 'header_ns', 'actual_exposure_us', 'gain')) + '</tr>')
+            parts.append('</table><p>' + ' · '.join(f'<a href="{escape(files[key])}">{label}</a>' for key, label in
+                         [('depth', '下载16位深度数值 PNG'), ('metadata', '查看此帧来源元数据和 SHA-256')]
+                         if key in files) + '</p>')
+        parts.append('</section>')
     parts.append('<p>图像验证：' + ('已启用' if report['verify_images'] else '未启用，仅验证元数据；完整验收请加 --verify-images') + '</p></html>')
     (path / 'report.html').write_text('\n'.join(parts), encoding='utf-8')
     with (path / 'samples.csv').open('w', newline='', encoding='utf-8') as output:

@@ -2,7 +2,7 @@
 from collections import Counter, OrderedDict, deque
 from decimal import Decimal
 import math
-from .exposure import rgb_exposure_parameter
+from .exposure import rgb_exposure_parameter, metadata_exposure_us, metadata_exposure_scale_us
 from .depth_processing import DEPTH_FILTER_PARAMETERS
 
 
@@ -83,6 +83,7 @@ class CameraCheck:
         self.pending, self.image_pending = OrderedDict(), OrderedDict()
         self.last_counter, self.last_capture = {}, {}
         self.last_received = {}
+        self.raw_samples = {}
         self.last_epoch = None
         self.trace = deque(maxlen=10000)
 
@@ -98,6 +99,16 @@ class CameraCheck:
 
     def raw(self, stream, raw, header_ns, receive_ns, elapsed):
         self.counts[stream] += 1; self.last_received[stream] = elapsed
+        # Keep bounded original evidence so unit and timestamp errors can be
+        # investigated from the report without another image subscription.
+        fields = ('frame_number', 'frame_timestamp', 'clock_domain', 'hw_timestamp',
+                  'sensor_timestamp', 'actual_exposure', 'gain_level', 'auto_exposure', 'actual_fps')
+        sample = {'elapsed_sec': elapsed, 'header_ns': header_ns, 'receive_ns': receive_ns,
+                  'raw': {key: (None if isinstance(raw.get(key), float) and not math.isfinite(raw[key]) else raw.get(key))
+                          for key in fields}}
+        if stream not in self.raw_samples:
+            self.raw_samples[stream] = {'first': sample}
+        self.raw_samples[stream]['last'] = sample
         try:
             counter = int(raw['frame_number'])
             if stream in self.last_counter:
@@ -111,7 +122,8 @@ class CameraCheck:
         automatic = self.camera[stem + '_auto_exposure']
         for key, suffix in [('actual_exposure', 'exposure_us'), ('gain_level', 'gain')]:
             try:
-                value = finite(raw[key])
+                value = (metadata_exposure_us(self.camera['device_type'], stream, raw)
+                         if key == 'actual_exposure' else finite(raw[key]))
                 if value < 0 or (key == 'actual_exposure' and value == 0):
                     raise ValueError('invalid exposure/gain')
                 self.metric(stream + '_' + suffix, value)
@@ -135,6 +147,8 @@ class CameraCheck:
             self.unknowns[stream + ':缺少自动曝光状态'] += 1
         try:
             capture = mapped_midpoint_ns(raw)
+            offset = (int(raw['sensor_timestamp']) - int(raw['hw_timestamp']) + 2**31) % 2**32 - 2**31
+            self.metric(stream + '_sensor_minus_hw_us', offset)
             if stream in self.last_capture and capture <= self.last_capture[stream]:
                 self.fail(stream + ':映射时间重复或倒退')
             self.last_capture[stream] = capture
@@ -195,7 +209,7 @@ class CameraCheck:
             exposures = {}
             for stream in ('rgb', 'depth'):
                 try:
-                    value = finite(group[stream]['raw']['actual_exposure'])
+                    value = metadata_exposure_us(self.camera['device_type'], stream, group[stream]['raw'])
                     if value <= 0:
                         raise ValueError('invalid actual exposure')
                     exposures[stream] = value
@@ -265,6 +279,9 @@ class CameraCheck:
                 'counts': dict(self.counts), 'fps': {s: self.counts[s] / duration for s in ('rgb', 'depth', 'normalized')},
                 'metrics': {k: v.report() for k, v in self.metrics.items()},
                 'failures': failures, 'unknowns': unknowns, 'parameters': parameters,
+                'raw_metadata_samples': self.raw_samples,
+                'metadata_exposure_scale_us': {stream: metadata_exposure_scale_us(self.camera['device_type'], stream)
+                                               for stream in ('rgb', 'depth')},
                 'require_equal_exposure': self.require_equal_exposure,
                 'limits': {'exposure_us': self.camera['max_actual_exposure_us'],
                            'rgb_depth_exposure_difference_us': 0 if self.require_equal_exposure else None,
