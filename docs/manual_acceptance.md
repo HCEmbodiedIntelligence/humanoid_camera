@@ -88,7 +88,16 @@ ros2 run humanoid_camera check_cameras.py \
 - `evidence/<相机ID>/<样本编号>/rgb.png`：原分辨率无损 RGB 照片。
 - 同目录 `depth.png`：收到的 16 位深度数值，包含当前驱动滤波结果；不是未滤波的传感器数据。
 - 同目录 `depth_preview.png`：供人眼查看的灰度预览，零值为黑色；显示范围记录在 `frame.json`，不表示米制距离。
+- 同目录 `depth_color.png`：深度伪彩色图，红近、蓝远、零值为黑色；`depth_color_legend.png` 是对应距离色标。
 - 同目录 `frame.json`：RGB/深度各自的来源帧号、图像时间戳、曝光原始值及 μs 换算值、增益、源元数据和文件 SHA-256。
+
+报告优先显示彩色深度图。彩色图默认固定使用 0.2–2.0 m 范围，超出范围的有效值显示端点颜色，
+同一个深度值在不同帧使用同一种颜色。可用 `--depth-preview-min-m 0.05 --depth-preview-max-m 0.6`
+调整近距离场景的显示范围，不改变曝光、深度数值、ROS 话题或验收阈值。
+米制色标依据 ROS 16UC1 毫米编码（[REP 118](https://github.com/ros-infrastructure/rep/blob/master/rep-0118.rst)），
+不是独立精度标定；显示设置、单位和所有预览文件哈希保存在逐帧 JSON 中。
+RealSense Viewer 也对深度做伪彩色显示，色图、范围、直方图均衡不同会导致颜色不同。
+`depth.png` 是给程序使用的 16 位深度数值，普通查看器显示很暗属于常见显示方式差异。
 
 RGB 与深度取自同一条 RGBD 消息，保留各自时间戳。只有照片和元数据逐帧匹配时才填写曝光与增益，
 匹配失败仍保存照片并标明未知。单张照片可以说明当时画面，连续性、曝光限制及同步检查仍依赖采样统计。
@@ -130,6 +139,13 @@ RGB 与深度取自同一条 RGBD 消息，保留各自时间戳。只有照片�
 
 ## 定位图像接收不足
 
+本包直接启动官方 C++ 节点，必须显式指定红外输出开关：官方 `rs_launch.py` 默认关闭 IR，
+C++ VideoProfilesManager 的默认值却是开启。现在默认 D405 关闭 IR1/IR2，D435 在需要软件自动增益反馈时
+仅开启 IR1；高级参数明确要求的 IR 输出继续保留。验收回读 `enable_infra1` 和 `enable_infra2`。
+此处关闭的是额外输出到主机的红外图像，不关闭相机内部的双目深度计算，也不改变 RGB/深度分辨率、帧率和滤波。
+参考：[官方启动参数](https://github.com/realsenseai/realsense-ros/blob/4.57.7/realsense2_camera/launch/rs_launch.py)、
+[C++ 参数注册](https://github.com/realsenseai/realsense-ros/blob/4.57.7/realsense2_camera/src/profile_manager.cpp)。
+
 如果报告显示深度图像和深度元数据同时中断，先收集驱动、USB 与主机传输证据。
 保持相机运行，在相机电脑上执行下面的独立只读脚本。它可直接从源码运行，无需重新编译或重启相机：
 
@@ -152,7 +168,12 @@ python3 src/humanoid_camera/scripts/collect_camera_diagnostics.py \
 网络计数覆盖整台主机，并非相机专属丢包计数。默认读取 `~/.ros/log`（或 `ROS_LOG_DIR`）、
 `~/.local/share/humanoid-manager/runtime_logs` 和当前相机进程的日志文件，优先保留运行中驱动的日志；
 自定义目录可重复传 `--log-root /实际日志目录`。最多保存 12 个日志尾部、每个 1 MiB，
+空日志不占配额；当前相机日志之外，优先选择时间范围与原验收重叠的日志。
 `manifest.json` 标明截断、遗漏与错误；有限尾部可能不包含原测试事件。
+同时保存 `/proc/net/udp{,6}` 首尾快照，并按 socket inode 关联相机进程，记录可对应 socket 的丢弃增量。
+socket 在两次快照之间退出或新建时不能直接计算增量；主机总计数本身仍不能归因于某台相机。
+开始时先被动采样 10 秒，此阶段不运行 ROS 查询；`passive_host_window` 与包含 ROS 查询的全程增量分开记录，
+避免把临时 ROS CLI 节点的发现流量当成原有图像传输。`udp_socket_memory.txt` 保存 `ss -uanmp` 的实际 socket 缓冲和进程信息。
 报告文件、日志与系统诊断打包保存，原来的照片证据包仍单独保留。
 
 新版 `timestamp_adapter.py` 每秒发布 `/<namespace>/normalized/diagnostics`（`std_msgs/msg/String`）。

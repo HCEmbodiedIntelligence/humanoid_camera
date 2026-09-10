@@ -158,7 +158,8 @@ def write_report(report, root, *, destination=None):
     evidence = report.get('evidence', {})
     if evidence.get('enabled'):
         parts.append('<section><h2>真实图像抽样证据</h2><p>RGB 为无损 PNG；深度数值 PNG 原样保存接收到的16位数值（包含当前驱动滤波结果）。'
-                     '深度预览仅为显示拉伸，数值范围按原始像素计数，不表示已标定的米制距离。照片取自同一条 RGBD 消息；'
+                     '彩色预览用颜色表示深度：红色近、蓝色远、黑色无有效深度；色标按 ROS 16UC1 毫米编码换算为米，不代表独立精度标定。'
+                     '灰度预览按每帧有效数值拉伸。照片取自同一条 RGBD 消息；'
                      '曝光与增益仅在来源元数据逐帧匹配时展示。单张照片不能证明连续帧率或物理同步精度。</p>')
         if not evidence.get('saved'):
             parts.append('<p class="FAIL">未保存到照片证据，请查看接收计数和错误；本报告不能充当有图像证据的验收。</p>')
@@ -169,17 +170,21 @@ def write_report(report, root, *, destination=None):
             parts.append(f"<h3>{escape(item['camera_id'])} · 样本 {item['sample_index']} · 采样后 {item['elapsed_sec']:.2f}s</h3>")
             parts.append('<p>元数据匹配：' + ('已匹配' if item['metadata_status'] == 'matched' else '未确认，曝光与增益未知') + '</p>')
             parts.append('<div style="display:flex;gap:16px;flex-wrap:wrap">')
-            for key, label in [('rgb', 'RGB 原分辨率 PNG'), ('depth_preview', '深度显示预览')]:
+            depth_key = 'depth_color' if 'depth_color' in files else 'depth_preview'
+            for key, label in [('rgb', 'RGB 原分辨率 PNG'), (depth_key, '深度伪彩色预览' if depth_key == 'depth_color' else '深度灰度预览')]:
                 if key in files:
                     url = escape(files[key])
-                    parts.append(f'<figure style="margin:0;max-width:46%"><a href="{url}"><img src="{url}" style="width:100%" alt="{label}"></a><figcaption>{label}</figcaption></figure>')
+                    parts.append(f'<figure style="margin:0;max-width:46%"><a href="{url}"><img src="{url}" style="width:100%" alt="{label}"></a><figcaption>{label}</figcaption>')
+                    if key == 'depth_color' and 'depth_color_legend' in files:
+                        parts.append(f'<img src="{escape(files["depth_color_legend"])}" style="width:100%" alt="深度距离色标">')
+                    parts.append('</figure>')
             parts.append('</div><table><tr><th>流</th><th>来源帧号</th><th>图像时间戳 ns</th><th>曝光 μs</th><th>增益</th></tr>')
             for stream in ('rgb', 'depth'):
                 row = observations[stream]
                 parts.append('<tr><td>' + stream + '</td>' + ''.join('<td>' + escape(row.get(key)) + '</td>'
                              for key in ('frame_number', 'header_ns', 'actual_exposure_us', 'gain')) + '</tr>')
             parts.append('</table><p>' + ' · '.join(f'<a href="{escape(files[key])}">{label}</a>' for key, label in
-                         [('depth', '下载16位深度数值 PNG'), ('metadata', '查看此帧来源元数据和 SHA-256')]
+                         [('depth', '下载16位深度数值 PNG'), ('depth_preview', '灰度预览'), ('metadata', '查看此帧来源元数据和 SHA-256')]
                          if key in files) + '</p>')
         parts.append('</section>')
     parts.append('<p>图像验证：' + ('已启用' if report['verify_images'] else '未启用，仅验证元数据；完整验收请加 --verify-images') + '</p></html>')

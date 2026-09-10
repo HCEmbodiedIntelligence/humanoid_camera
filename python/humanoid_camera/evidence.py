@@ -11,6 +11,7 @@ import numpy as np
 from PIL import Image
 
 from .exposure import metadata_exposure_us
+from .depth_visualization import color_scale, depth_color_preview, depth_color_legend
 
 
 def stamp(header):
@@ -65,8 +66,9 @@ def depth_preview(depth):
 
 
 class EvidenceRecorder:
-    def __init__(self, directory, *, interval=10., max_pairs=6):
+    def __init__(self, directory, *, interval=10., max_pairs=6, depth_min_m=.2, depth_max_m=2.):
         self.directory = Path(directory)
+        self.depth_scale = color_scale(depth_min_m, depth_max_m)
         self.interval, self.max_pairs = interval, max_pairs
         self.last_selected, self.selected = {}, {}
         self.metadata, self.pending = OrderedDict(), OrderedDict()
@@ -147,6 +149,12 @@ class EvidenceRecorder:
                     preview, preview_range = depth_preview(data)
                     Image.fromarray(preview).save(directory / 'depth_preview.png', compress_level=1)
                     files['depth_preview'] = str(relative / 'depth_preview.png')
+                    colored, _ = depth_color_preview(data, self.depth_scale['min_m'], self.depth_scale['max_m'])
+                    Image.fromarray(colored).save(directory / 'depth_color.png', compress_level=1)
+                    files['depth_color'] = str(relative / 'depth_color.png')
+                    depth_color_legend(self.depth_scale['min_m'], self.depth_scale['max_m'], data.shape[1]).save(
+                        directory / 'depth_color_legend.png', compress_level=1)
+                    files['depth_color_legend'] = str(relative / 'depth_color_legend.png')
             except Exception as error:
                 errors.append(stream + ': ' + str(error))
         matched = (isinstance(metadata, dict) and metadata.get('source_id') == ident
@@ -174,6 +182,7 @@ class EvidenceRecorder:
                   'pair_header_ns': stamp(message.header), 'observations': observations,
                   'metadata_status': 'matched' if matched else 'missing_or_mismatched',
                   'depth_preview_range': preview_range, 'files': files, 'errors': errors,
+                  'depth_color_scale': self.depth_scale,
                   'pixel_processing': 'RGB PNG lossless; depth PNG preserves received uint16 values; preview is scaled for display',
                   'camera_config_id': metadata.get('camera_config_id') if matched else None,
                   'configuration': {key: camera[key] for key in (

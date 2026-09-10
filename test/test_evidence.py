@@ -56,12 +56,24 @@ def test_saved_photos_preserve_pixels_and_record_matching_frame_evidence(tmp_pat
     np.testing.assert_array_equal(rgb, [[[255, 0, 0], [0, 255, 0]], [[0, 0, 255], [127, 128, 129]]])
     depth = np.array(Image.open(tmp_path / saved['files']['depth']))
     np.testing.assert_array_equal(depth, [[0, 3900], [65535, 258]])
+    colored = np.array(Image.open(tmp_path / saved['files']['depth_color']))
+    assert colored.shape == (2, 2, 3)
+    np.testing.assert_array_equal(colored[0, 0], [0, 0, 0])
+    np.testing.assert_array_equal(colored[0, 1], [0, 0, 255])
+    assert saved['depth_color_scale']['min_m'] == .2
+    assert saved['depth_color_scale']['max_m'] == 2.
     assert saved['observations']['depth']['source_data_sha256'] == hashlib.sha256(image.depth.data).hexdigest()
     for name, digest in saved['sha256'].items():
         assert hashlib.sha256((tmp_path / saved['files'][name]).read_bytes()).hexdigest() == digest
     manifest = json.loads((tmp_path / saved['files']['metadata']).read_text())
     assert manifest['source_metadata'] == metadata
     assert (image, metadata) == original
+    report = {'status': 'FAIL', 'data_origin': '合成数据自测', 'duration_sec': 1.,
+              'verify_images': True, 'cameras': [], 'evidence': result}
+    write_report(report, tmp_path, destination=tmp_path)
+    html = (tmp_path / 'report.html').read_text()
+    assert saved['files']['depth_color'] in html and saved['files']['depth_color_legend'] in html
+    assert saved['files']['depth'] in html
 
 
 @pytest.mark.parametrize('mismatch', ['missing', 'wrong_source', 'wrong_frame'])
