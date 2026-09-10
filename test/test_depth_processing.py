@@ -33,7 +33,7 @@ def test_all_cameras_disable_flat_and_nested_overrides_when_saved_and_launched(a
                  'width': 1280, 'height': 720, 'fps': 15,
                  'align_depth': True, 'pointcloud': True,
                  'parameters': {**advanced, 'spatial_filter.enable': False, 'spatial_filter': {'enable': False, 'smooth_alpha': .6},
-                                'depth_module.depth_qos': 'SENSOR_DATA'}}
+                                'depth_qos': 'SENSOR_DATA'}}
                 for index, (ident, model) in enumerate([
                     ('camera_left', 'd405'), ('camera_right', 'd405'), ('camera_hand', 'd435')])]
     before = copy.deepcopy(original)
@@ -51,7 +51,7 @@ def test_all_cameras_disable_flat_and_nested_overrides_when_saved_and_launched(a
                 driver_parameters({**camera, 'parameters': parameters})]))[0]
             assert params['temporal_filter.enable'] is False
             assert params['spatial_filter.enable'] is True
-            assert params['depth_module.depth_qos'] == 'SENSOR_DATA'
+            assert params['depth_qos'] == 'SENSOR_DATA'
             assert params['depth_module.depth_profile'] == '1280,720,15'
             assert params['enable_sync'] is True
             assert params['align_depth.enable'] is True
@@ -66,11 +66,13 @@ def test_all_cameras_disable_flat_and_nested_overrides_when_saved_and_launched(a
 
 
 @pytest.mark.parametrize('filename', ['d405.launch.py', 'd435.launch.py'])
-def test_standalone_launch_overrides_custom_yaml_in_ros_parameter_parser(filename, tmp_path):
+@pytest.mark.parametrize('qos_override', [None, 'SENSOR_DATA'])
+def test_standalone_launch_overrides_custom_yaml_in_ros_parameter_parser(filename, qos_override, tmp_path):
     custom = tmp_path / 'custom.yaml'
     custom.write_text(yaml.safe_dump({'/**': {'ros__parameters': {
         'temporal_filter': {'enable': True}, 'spatial_filter.enable': False, 'spatial_filter': {'enable': False, 'smooth_alpha': .6},
-        'depth_module.depth_profile': '640,480,30'}}}))
+        'depth_module.depth_profile': '640,480,30',
+        **({'depth_qos': qos_override} if qos_override else {})}}}))
     context = LaunchContext()
     context.launch_configurations.update(params_file=str(custom), namespace='front',
                                          camera_name='camera', serial_no='TEST_ONLY', auto_gain='true')
@@ -97,6 +99,8 @@ def test_standalone_launch_overrides_custom_yaml_in_ros_parameter_parser(filenam
         assert node.get_parameter('temporal_filter.enable').value is False
         assert node.get_parameter('spatial_filter.enable').value is True
         assert node.get_parameter('depth_module.depth_profile').value == '640,480,30'
+        assert node.get_parameter('depth_qos').value == (qos_override or 'DEFAULT')
+        assert node.get_parameter('color_qos').value == 'DEFAULT'
     finally:
         if node is not None:
             node.destroy_node()

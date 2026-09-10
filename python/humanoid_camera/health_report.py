@@ -13,9 +13,21 @@ def value(metric, key='max'):
     return '—' if result is None else f'{result:.3f}'
 
 
+def finding_value(camera, message, count):
+    counts = camera.get('counts', {})
+    totals = {
+        '原始到标准化配对覆盖率低于95%': min(counts.get('rgb', 0), counts.get('depth', 0)),
+        '标准化图像校验覆盖率低于95%': counts.get('normalized', 0),
+    }
+    if message in totals and totals[message]:
+        total = totals[message]
+        return f'成功校验 {count}/{total} 对（{count / total:.2%}）'
+    return str(count)
+
+
 def console_report(report):
     lines = [f"相机手动验收：{report['status']}  |  来源：{report['data_origin']}  |  {report['duration_sec']:.1f}s",
-             '相机 | 状态 | RGB/深度 Hz | RGB/深度最大曝光 us | RGB-D曝光时长差 max us | 中点差 p95/max ms | 换算残差 max ns']
+             '相机 | 状态 | RGB/深度元数据 Hz | RGB/深度最大曝光 us | RGB-D曝光时长差 max us | 中点差 p95/max ms | 换算残差 max ns']
     if report.get('runtime_error'):
         lines.append('采样错误：' + report['runtime_error'])
     for camera in report['cameras']:
@@ -27,6 +39,11 @@ def console_report(report):
                      f"{value(skew, 'p95_recent')}/{value(skew)} | {value(metrics.get('mapping_residual_ns'))}")
         lines.append('  曝光时长一致性：' + ('要求每对差值为0 μs' if camera.get('require_equal_exposure')
                                          else '仅报告差值，未要求相等'))
+        counts = camera.get('counts', {})
+        if report.get('verify_images') and report['duration_sec'] > 0:
+            lines.append(f"  检查器 RGBD 图像接收：{counts.get('images', 0)} 对 / "
+                         f"{counts.get('images', 0) / report['duration_sec']:.2f} Hz；"
+                         f"标准化元数据接收：{counts.get('normalized', 0)} 条")
         scales = camera.get('metadata_exposure_scale_us', {})
         if scales.get('rgb') == 100:
             lines.append('  D435 RGB曝光元数据：原始值×100换算为μs；时间戳字段不作此换算。')
@@ -53,7 +70,7 @@ def console_report(report):
             lines.append('  适配节点诊断：未取得完整窗口；需运行新版适配节点，不能据接收帧率确定丢帧位置。')
         for key, label in [('failures', '失败'), ('unknowns', '未确认')]:
             for message, count in camera[key].items():
-                lines.append(f'  [{label}] {message}: {count}')
+                lines.append(f'  [{label}] {message}: {finding_value(camera, message, count)}')
     lines.append('PASS 仅表示本次观测项满足阈值；SDK 映射的绝对误差、物理同步精度未独立测量。')
     if report.get('receiver_qos'):
         lines.append('检查器接收QoS：' + '；'.join(topic + '=' + qos['requested_reliability']
@@ -104,8 +121,11 @@ def write_report(report, root, *, destination=None):
     for camera in report['cameras']:
         parts.append(f"<section><h2>{escape(camera['id'])} <span class='{camera['status']}'>{camera['status']}</span></h2>"
                      f"<p>型号 {escape(camera['device_type'])} · 配置序列号 {escape(camera['serial_no'])}</p>"
-                     f"<p>观测帧率 RGB/深度/标准化：{camera['fps']['rgb']:.2f} / {camera['fps']['depth']:.2f} / {camera['fps']['normalized']:.2f} Hz</p>"
+                     f"<p>元数据接收率 RGB/深度/标准化：{camera['fps']['rgb']:.2f} / {camera['fps']['depth']:.2f} / {camera['fps']['normalized']:.2f} Hz</p>"
                      f"<p>阈值：实际曝光 ≤ {camera['limits']['exposure_us']} μs；中点差 ≤ {camera['limits']['midpoint_skew_ms']} ms。</p>")
+        if report.get('verify_images') and report['duration_sec'] > 0:
+            images = camera.get('counts', {}).get('images', 0)
+            parts.append(f"<p>实际 RGBD 图像接收：{images} 对 / {images / report['duration_sec']:.2f} Hz。</p>")
         parts.append('<p>曝光时长一致性：' + ('要求每对实际曝光时长差为 0 μs。' if camera.get('require_equal_exposure')
                                             else '仅统计差值，未要求相等。') + '</p>')
         parts.append('<table><tr><th>观测项</th><th>样本数</th><th>最小</th><th>平均</th><th>P95</th><th>最大</th></tr>')
@@ -117,7 +137,8 @@ def write_report(report, root, *, destination=None):
         for key, label, css in [('failures', '失败项', 'FAIL'), ('unknowns', '未确认项', 'UNKNOWN')]:
             if camera[key]:
                 parts.append(f'<h3 class="{css}">{label}</h3><ul>')
-                for message, count in camera[key].items(): parts.append(f'<li>{escape(message)}：{escape(count)}</li>')
+                for message, count in camera[key].items():
+                    parts.append(f'<li>{escape(message)}：{escape(finding_value(camera, message, count))}</li>')
                 parts.append('</ul>')
         parts.append('<details><summary>计数及驱动参数回读</summary><pre>' + escape(json.dumps(
             {'counts': camera['counts'], 'parameters': camera['parameters'],

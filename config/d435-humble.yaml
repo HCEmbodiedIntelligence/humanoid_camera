@@ -9,12 +9,16 @@
     enable_depth: true
     depth_module.depth_profile: 640,480,30
     depth_module.depth_format: Z16
+    depth_qos: DEFAULT
+    depth_info_qos: DEFAULT
     depth_module.enable_auto_exposure: false
     depth_module.exposure: 3900
     depth_module.gain: 64
     depth_module.global_time_enabled: true
     rgb_camera.color_profile: 640,480,30
     rgb_camera.color_format: RGB8
+    color_qos: DEFAULT
+    color_info_qos: DEFAULT
     rgb_camera.enable_auto_exposure: false
     rgb_camera.exposure: 39
     rgb_camera.gain: 64

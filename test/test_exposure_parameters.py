@@ -66,10 +66,10 @@ def test_d405_shared_exposure_stays_in_microseconds(driver_parameters):
 def test_manual_policy_preserves_video_profile_and_processing_parameters(driver_parameters):
     camera = validate_cameras([{'id': 'head', 'device_type': 'd435', 'width': 1280,
         'height': 720, 'fps': 15, 'align_depth': True, 'pointcloud': True,
-        'parameters': {'rgb_camera.color_qos': 'SENSOR_DATA'}}])[0]
+        'parameters': {'color_qos': 'SENSOR_DATA'}}])[0]
     params = driver_parameters(camera)
     assert params['rgb_camera.color_profile'] == params['depth_module.depth_profile'] == '1280,720,15'
-    assert params['rgb_camera.color_qos'] == 'SENSOR_DATA'
+    assert params['color_qos'] == 'SENSOR_DATA'
     assert params['enable_sync'] is True
     assert params['align_depth.enable'] is True
     assert params['pointcloud.enable'] is True

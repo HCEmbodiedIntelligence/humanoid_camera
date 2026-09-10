@@ -8,6 +8,7 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from humanoid_camera.depth_processing import DEPTH_FILTER_PARAMETERS
+from humanoid_camera.driver_qos import driver_qos_parameters
 
 
 def generate_launch_description():
@@ -26,7 +27,7 @@ def generate_launch_description():
              condition=IfCondition(LaunchConfiguration('normalize_timestamps')), output='screen'),
         Node(package='realsense2_camera', executable='realsense2_camera_node',
              name=LaunchConfiguration('camera_name'), namespace=LaunchConfiguration('namespace'),
-             parameters=[LaunchConfiguration('params_file'), {
+             parameters=[driver_qos_parameters(), LaunchConfiguration('params_file'), {
                  **DEPTH_FILTER_PARAMETERS,
                  'depth_module.enable_auto_exposure': False,
                  'depth_module.exposure': 3900,

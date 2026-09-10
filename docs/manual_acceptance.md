@@ -145,7 +145,13 @@ RGB 与深度取自同一条 RGBD 消息，保留各自时间戳。只有照片�
 
 采集接收策略：适配器和检查器优先使用 `RELIABLE`；按发布端发现结果每秒检查，遇到仅支持 `BEST_EFFORT` 的源时回退，发布端重启后也会重新检查。检查器在 JSON/HTML 中保存 `receiver_qos`，适配器诊断保存 `input_qos`。标准化图像、元数据、点云发布端为 `RELIABLE`，兼容已有 BEST_EFFORT 接收者。图像队列深度 10、元数据 30、点云 2，均为 VOLATILE，不回放旧图像。管理器的连续采集和原始 MCAP 图像接收也采用相同策略。
 
-点云改为下游订阅标准化点云或点云元数据时才转发，启动发现约需 1 秒；点云等候来源配对的缓存独立限制为最多 4 帧、16 MiB（不超过配置的总队列上限）。点云不会再挤占 RGBD 等待组。相机驱动的发布 QoS、分辨率、帧率、曝光、滤波和时间戳换算不变。需要同时更新 `humanoid_camera` 与 `humanoid_manager` 并正常重启相机和管理器录制进程后复测。
+点云改为下游订阅标准化点云或点云元数据时才转发，启动发现约需 1 秒；点云等候来源配对的缓存独立限制为最多 4 帧、16 MiB（不超过配置的总队列上限）。点云不会再挤占 RGBD 等待组。分辨率、帧率、曝光、滤波和时间戳换算不变。接收策略更新需要同时更新 `humanoid_camera` 与 `humanoid_manager` 并正常重启相机和管理器录制进程后复测。
+
+发送端也必须有明确的重传缓存。本包的相机启动入口默认使用官方 `DEFAULT` 发布预设（RELIABLE / KEEP_LAST 10 / VOLATILE），避免把缓存交给 `SYSTEM_DEFAULT`。后者在默认 Humble/Fast DDS 的实际 DataWriter 中为 KEEP_LAST 1；即使显示 RELIABLE，队列中的旧消息也可能在接收或重传完成前被覆盖。显式高级 QoS 选择仍保留。`ros2 topic info` 显示 History UNKNOWN 不表示 0 帧，只表示发现信息不足以返回这一项。
+
+参数名称为根级 `depth_qos`、`color_qos`、`depth_info_qos`、`color_info_qos`，验收将回读它们。更新代码后正常重启相机才能重建发布端；仅设置参数值不能证明当前发布端已采用新策略。官方注册逻辑见 [profile_manager.cpp（4.57.7）](https://github.com/realsenseai/realsense-ros/blob/4.57.7/realsense2_camera/src/profile_manager.cpp)，系统默认映射见 [Humble rmw_fastrtps](https://github.com/ros2/rmw_fastrtps/blob/humble/rmw_fastrtps_shared_cpp/src/qos.cpp)。本地实际 QoS 读取可以验证单帧默认值，但真机丢帧是否全部由此造成仍需连续采集对比。
+
+报告的主表 RGB/深度 Hz 为原始元数据接收率，另行显示实际 RGBD 图像接收率。配对覆盖率提示中的计数是成功校验数，例如 `1662/1764（94.22%）`，不是 1662 对失败。恒定光照下测试不加 `--exercise-auto`；只有主动改变光照并恢复时才用该选项验收自动增益响应。
 
 可靠传输会尝试重传，但负载过大仍会增加延迟或造成有界队列丢帧，不能视为零丢帧保证。大消息分片丢失及重传原理见 [Fast DDS 大数据传输说明](https://fast-dds.docs.eprosima.com/en/v2.6.10/fastdds/use_cases/large_data/large_data.html)。本地合成 ROS 图像测试只验证接收、像素与时间戳保留、兼容回退和点云关联；实际吞吐仍以真机报告为准。
 

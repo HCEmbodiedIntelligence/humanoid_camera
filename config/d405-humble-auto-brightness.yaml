@@ -8,6 +8,10 @@
     depth_module.color_profile: 640,480,30
     depth_module.color_format: RGB8
     depth_module.depth_format: Z16
+    depth_qos: DEFAULT
+    depth_info_qos: DEFAULT
+    color_qos: DEFAULT
+    color_info_qos: DEFAULT
     depth_module.enable_auto_exposure: true
     depth_module.auto_exposure_limit: 4500
     depth_module.auto_gain_limit: 64
