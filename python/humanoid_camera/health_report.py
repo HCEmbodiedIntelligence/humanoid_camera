@@ -35,6 +35,17 @@ def console_report(report):
             lines.append(f"  {stream}元数据：首帧在采样开始后{first['elapsed_sec']:.3f}s；"
                          f"末帧原始曝光={last['raw'].get('actual_exposure')}；"
                          f"sensor−hw偏移 max={value(metrics.get(stream + '_sensor_minus_hw_us'))} μs")
+        pipeline = camera.get('pipeline_window')
+        if pipeline:
+            rates = pipeline['received_hz']
+            lines.append(f"  适配节点 {pipeline['duration_sec']:.1f}s 内："
+                         f"RGB/深度图像接收={rates['rgb']:.2f}/{rates['depth']:.2f} Hz；"
+                         f"RGB/深度元数据接收={rates['rgb_meta']:.2f}/{rates['depth_meta']:.2f} Hz；"
+                         f"成组发布={pipeline['published_pairs_hz']:.2f} Hz")
+            lines.append('  适配节点丢弃原因：' + json.dumps(pipeline['discarded_groups'], ensure_ascii=False)
+                         + '；丢弃时缺少：' + json.dumps(pipeline['missing_when_discarded'], ensure_ascii=False))
+        else:
+            lines.append('  适配节点诊断：未取得完整窗口；需运行新版适配节点，不能据接收帧率确定丢帧位置。')
         for key, label in [('failures', '失败'), ('unknowns', '未确认')]:
             for message, count in camera[key].items():
                 lines.append(f'  [{label}] {message}: {count}')
@@ -101,6 +112,17 @@ def write_report(report, root, *, destination=None):
             {'counts': camera['counts'], 'parameters': camera['parameters'],
              'metadata_exposure_scale_us': camera.get('metadata_exposure_scale_us'),
              'raw_metadata_samples': camera.get('raw_metadata_samples')}, ensure_ascii=False, indent=2)) + '</pre></details></section>')
+        pipeline = camera.get('pipeline_window')
+        if pipeline:
+            rates = pipeline['received_hz']
+            parts.append('<section><h3>适配节点接收与发布：' + escape(camera['id']) + '</h3>'
+                         f"<p>节点独立计数窗口 {pipeline['duration_sec']:.2f}s；RGB/深度图像接收 "
+                         f"{rates['rgb']:.2f}/{rates['depth']:.2f} Hz；RGB/深度元数据接收 "
+                         f"{rates['rgb_meta']:.2f}/{rates['depth_meta']:.2f} Hz；成组发布 "
+                         f"{pipeline['published_pairs_hz']:.2f} Hz。</p>"
+                         '<p>这是适配节点回调接收及发布调用计数，不是传感器硬件帧率；与检查器的窗口分别统计。</p>'
+                         '<pre>' + escape(json.dumps(camera.get('pipeline_diagnostics'), ensure_ascii=False, indent=2))
+                         + '</pre></section>')
     evidence = report.get('evidence', {})
     if evidence.get('enabled'):
         parts.append('<section><h2>真实图像抽样证据</h2><p>RGB 为无损 PNG；深度数值 PNG 原样保存接收到的16位数值（包含当前驱动滤波结果）。'

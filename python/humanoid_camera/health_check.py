@@ -1,9 +1,11 @@
 """Read-only measurement checks; reported clock agreement is not physical calibration."""
 from collections import Counter, OrderedDict, deque
 from decimal import Decimal
+import json
 import math
 from .exposure import rgb_exposure_parameter, metadata_exposure_us, metadata_exposure_scale_us
 from .depth_processing import DEPTH_FILTER_PARAMETERS
+from .pipeline_diagnostics import summarize_window
 
 
 def finite(value):
@@ -84,11 +86,24 @@ class CameraCheck:
         self.last_counter, self.last_capture = {}, {}
         self.last_received = {}
         self.raw_samples = {}
+        self.pipeline_samples = {}
         self.last_epoch = None
         self.trace = deque(maxlen=10000)
 
     def metric(self, name, value):
         self.metrics.setdefault(name, Metric()).add(value)
+
+    def pipeline(self, data):
+        if data.get('source_id') != self.camera['id'] or data.get('schema_version') != 1:
+            return
+        json.dumps(data, allow_nan=False)
+        # Validate before keeping producer counters. A restarted node starts a
+        # new measurement window, instead of producing negative rates.
+        if summarize_window(data, {**data, 'uptime_sec': float(data['uptime_sec']) + 1}) is None:
+            return
+        if not self.pipeline_samples or self.pipeline_samples['last']['instance_id'] != data['instance_id']:
+            self.pipeline_samples = {'first': data}
+        self.pipeline_samples['last'] = data
 
     def fail(self, name):
         self.failures[name] += 1
@@ -280,6 +295,8 @@ class CameraCheck:
                 'metrics': {k: v.report() for k, v in self.metrics.items()},
                 'failures': failures, 'unknowns': unknowns, 'parameters': parameters,
                 'raw_metadata_samples': self.raw_samples,
+                'pipeline_diagnostics': self.pipeline_samples,
+                'pipeline_window': summarize_window(self.pipeline_samples.get('first'), self.pipeline_samples.get('last')),
                 'metadata_exposure_scale_us': {stream: metadata_exposure_scale_us(self.camera['device_type'], stream)
                                                for stream in ('rgb', 'depth')},
                 'require_equal_exposure': self.require_equal_exposure,

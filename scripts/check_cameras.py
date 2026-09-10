@@ -21,6 +21,7 @@ def run(cameras, args):
     from rclpy.qos import qos_profile_sensor_data
     from rcl_interfaces.srv import GetParameters
     from realsense2_camera_msgs.msg import Metadata, RGBD
+    from std_msgs.msg import String
     evidence = None
     if getattr(args, 'save_evidence', False):
         from humanoid_camera.evidence import EvidenceRecorder
@@ -63,6 +64,15 @@ def run(cameras, args):
                 node.create_subscription(Metadata, prefix + '/' + suffix,
                     lambda msg, stream=stream, cb=metadata: cb(msg, stream=stream), qos_profile_sensor_data)
             node.create_subscription(Metadata, camera['metadata_topic'], metadata, qos_profile_sensor_data)
+            def diagnostics(message, check=check):
+                if time.monotonic() < started:
+                    return
+                try:
+                    check.pipeline(json.loads(message.data))
+                except (ValueError, TypeError, KeyError, OverflowError, AttributeError):
+                    pass  # Optional diagnostic data never changes acceptance criteria.
+            node.create_subscription(String, '/' + camera['namespace'] + '/normalized/diagnostics',
+                                     diagnostics, qos_profile_sensor_data)
             if args.verify_images:
                 def image(message, check=check):
                     elapsed = time.monotonic() - started

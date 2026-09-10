@@ -14,6 +14,8 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image, PointCloud2, CameraInfo
 from realsense2_camera_msgs.msg import Metadata, RGBD
+from std_msgs.msg import String
+from humanoid_camera.pipeline_diagnostics import PipelineDiagnostics
 
 
 def ns(header):
@@ -52,6 +54,8 @@ class TimestampAdapter(Node):
         self.pending=OrderedDict();self.lineage=OrderedDict();self.infos={}
         self.bytes=0;self.seq=0;self.epoch=0;self.last_clock=None;self.last_sensor=None
         self.clock_id='realsense:'+uuid.uuid4().hex
+        self.diagnostics=PipelineDiagnostics(self.source,self.clock_id)
+        self.diagnostics_pub=self.create_publisher(String,'normalized/diagnostics',qos_profile_sensor_data)
         self.pair_pub=self.create_publisher(RGBD,'normalized/rgbd',qos_profile_sensor_data)
         self.meta_pub=self.create_publisher(Metadata,'normalized/metadata',qos_profile_sensor_data)
         self.cloud_pub=self.create_publisher(PointCloud2,'normalized/points',qos_profile_sensor_data)
@@ -63,21 +67,30 @@ class TimestampAdapter(Node):
         for name,topic in [('rgb','color/camera_info'),('depth','depth/camera_info')]:
             self.create_subscription(CameraInfo,self.base+'/'+topic,lambda msg,name=name:self.infos.update({name:msg}),qos_profile_sensor_data)
         self.create_timer(.1,self.observe_clock)
+        self.create_timer(1.,self.publish_diagnostics)
+
+    def publish_diagnostics(self):
+        data=self.diagnostics.snapshot(pending_groups=len(self.pending),pending_bytes=self.bytes,clock_epoch=self.epoch)
+        self.diagnostics_pub.publish(String(data=json.dumps(data)))
 
     def observe_clock(self):
         now=(self.get_clock().now().nanoseconds,time.monotonic_ns())
         if self.last_clock and abs((now[0]-self.last_clock[0])-(now[1]-self.last_clock[1]))>5_000_000:
+            for parts,_ in self.pending.values():self.diagnostics.discard('clock_reset',parts)
             self.epoch+=1;self.pending.clear();self.lineage.clear();self.bytes=0
         self.last_clock=now
 
     def receive(self,name,msg):
+        self.diagnostics.receive(name)
         key=ns(msg.header)
         if name=='cloud' and key in self.lineage:
             self.publish_cloud(msg,self.lineage[key]);return
         size=len(msg.json_data.encode()) if name.endswith('_meta') else len(msg.data)
-        if size>self.limit:return
+        if size>self.limit:
+            self.diagnostics.discard('oversize_'+name,{name:msg});return
         while self.pending and (self.bytes+size>self.limit or (key not in self.pending and len(self.pending)>=32)):
-            _,(_,used)=self.pending.popitem(last=False);self.bytes-=used
+            _,(evicted,used)=self.pending.popitem(last=False);self.bytes-=used
+            self.diagnostics.discard('buffer_limit',evicted)
         parts,used=self.pending.setdefault(key,({},0))
         if name in parts:return
         parts[name]=msg;self.pending[key]=(parts,used+size);self.bytes+=size
@@ -87,6 +100,7 @@ class TimestampAdapter(Node):
             raw={k:json.loads(parts[k+'_meta'].json_data) for k in ('rgb','depth')}
             times={k:midpoint(raw[k]) for k in raw}
         except (KeyError,ValueError,TypeError) as error:
+            self.diagnostics.discard('invalid_metadata',parts)
             self.get_logger().warning(str(error),throttle_duration_sec=5.)
             return
         sensor=int(raw['rgb']['sensor_timestamp'])
@@ -127,6 +141,7 @@ class TimestampAdapter(Node):
         out.header=deepcopy(out.rgb.header)
         self.meta_pub.publish(Metadata(header=out.header,json_data=json.dumps(d)))
         self.pair_pub.publish(out)
+        self.diagnostics.published+=1
         self.lineage[key]=d
         while len(self.lineage)>256:self.lineage.popitem(last=False)
         if 'cloud' in parts:self.publish_cloud(parts['cloud'],d)
