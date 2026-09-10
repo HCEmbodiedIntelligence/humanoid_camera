@@ -3,6 +3,7 @@ from collections import Counter, OrderedDict, deque
 from decimal import Decimal
 import math
 from .exposure import rgb_exposure_parameter
+from .depth_processing import DEPTH_FILTER_PARAMETERS
 
 
 def finite(value):
@@ -31,7 +32,7 @@ def mapped_midpoint_ns(raw):
 def expected_parameters(camera):
     """Public requested settings; advanced overrides are deliberately detectable."""
     result = {'enable_sync': camera['sync_rgb_depth'], 'enable_color': True, 'enable_depth': True,
-              'depth_module.global_time_enabled': True, 'temporal_filter.enable': False}
+              'depth_module.global_time_enabled': True, **DEPTH_FILTER_PARAMETERS}
     for prefix, stem in [('depth_module', 'depth')] + ([] if camera['device_type'].lower() == 'd405' else [('rgb_camera', 'color')]):
         automatic = camera[stem + '_auto_exposure']
         result[prefix + '.enable_auto_exposure'] = automatic
@@ -45,7 +46,8 @@ def expected_parameters(camera):
             exposure = camera[stem + '_exposure_us']
             result[prefix + '.exposure'] = (rgb_exposure_parameter(camera['device_type'], exposure)
                                              if stem == 'color' else exposure)
-            result[prefix + '.gain'] = camera[stem + '_gain']
+            if not camera.get(stem + '_auto_gain', False):
+                result[prefix + '.gain'] = camera[stem + '_gain']
     return result
 
 
@@ -122,6 +124,8 @@ class CameraCheck:
                         self.fail(stream + ':实际曝光与手动设定相差超过100us')
                 elif automatic and stem == 'depth' and value > self.camera['depth_auto_gain_limit']:
                     self.fail(stream + ':增益超过自动增益限制')
+                elif self.camera.get(stem + '_auto_gain', False) and value > self.camera[stem + '_auto_gain_limit']:
+                    self.fail(stream + ':增益超过程序自动增益限制')
             except (KeyError, ValueError, TypeError, OverflowError):
                 self.unknowns[stream + ':缺少有效' + key] += 1
         try:
@@ -252,7 +256,7 @@ class CameraCheck:
         if self.exercise_auto:
             for stream in ('rgb', 'depth'):
                 stem = 'depth' if stream == 'depth' or self.camera['device_type'].lower() == 'd405' else 'color'
-                if not self.camera[stem + '_auto_exposure']: continue
+                if not self.camera[stem + '_auto_exposure'] and not self.camera.get(stem + '_auto_gain', False): continue
                 values = [self.metrics.get(stream + suffix) for suffix in ('_exposure_us', '_gain')]
                 if not any(m and m.count and m.maximum > m.minimum for m in values):
                     unknowns[stream + ':未观察到曝光或增益响应，请改变光照后复测'] = 1

@@ -14,7 +14,7 @@
 这只是命名示例，并不固定相机数量；型号和序列号选择由官方驱动执行。
 参考[官方设备选择实现](https://github.com/IntelRealSense/realsense-ros/blob/ros2-master/realsense2_camera/src/realsense_node_factory.cpp)。
 
-本包使用官方 `realsense2_camera_node` 采集，并支持每个机器人配置任意数量和型号的 RealSense。网页逐台保存型号与唯一序列号，并统一配置曝光、增益补偿、RGB-D 成组同步和曝光中点时间戳对齐。D405 使用共享 `depth_module`，D435 等具有独立彩色传感器的型号使用 `depth_module` 与 `rgb_camera`。没有开流后切换、参数回读或逐帧曝光检查。
+本包使用官方 `realsense2_camera_node` 采集，并支持每个机器人配置任意数量和型号的 RealSense。网页逐台保存型号与唯一序列号，并统一配置曝光、增益补偿、RGB-D 成组同步和曝光中点时间戳对齐。D405 使用共享 `depth_module`，D435 等具有独立彩色传感器的型号使用 `depth_module` 与 `rgb_camera`。D435 的可选程序自动增益节点通过官方驱动参数服务调节增益。
 
 独立的 `timestamp_adapter.py` 只把官方 metadata 中的曝光中点转换到 ROS 时间，并为点云保留来源深度/RGB 关联。它不调用相机 SDK，也不修改官方驱动。`humanoid_manager` 只保存机器人相机清单并生成 launch 输入，相机采集仍在独立节点中执行。
 
@@ -40,26 +40,33 @@ ros2 launch humanoid_camera d435.launch.py namespace:=right serial_no:=你的序
 ./src/humanoid_camera/start_cameras.sh ./src/humanoid_camera/config/three-camera.example.yaml
 ```
 
-`multi_camera.launch.py` 接受管理器部署在机器人内部配置目录中的 `cameras.yaml`。同时启用多台 RealSense 时每台必须填写唯一序列号。型号字段不会限制为 D405/D435；其他 RealSense 型号使用官方驱动的通用参数映射，设备不支持的能力需要在真机启动时处理。D435 系列彩色流采用不超过 5 ms 的手动曝光，默认 4500 μs、增益 64。其原生 RGB 自动曝光无法设置这个上限，因此网页禁用该开关，加载旧版本时也关闭 RGB 自动曝光；深度自动曝光保持独立设置。没有新增软件自动曝光或图像提亮处理。
+`multi_camera.launch.py` 接受管理器部署在机器人内部配置目录中的 `cameras.yaml`。同时启用多台 RealSense 时每台必须填写唯一序列号。型号字段不会限制为 D405/D435；设备不支持的能力需要在真机启动时处理。
 
-页面和 `cameras.yaml` 的 `color_exposure_us` 使用微秒。D435 系列 RGB 的官方驱动参数 `rgb_camera.exposure` 使用 100 μs 单位，因此 4500 μs 转换为 `45`，5000 μs 转换为 `50`；不能把页面微秒值直接填入高级官方驱动参数。非整百微秒值向下取整。深度模块的曝光参数仍使用微秒。
+D435 系列深度和 RGB 均关闭原生自动曝光，默认使用同一帧率（30 FPS）和 3900 μs 手动曝光，起始增益分别为 64。加载仍启用深度自动曝光的旧 D435 配置时，会迁移到双路 3900 μs 手动曝光预设。已有双路手动曝光配置的明确曝光值予以保留，网页可继续调整。两路曝光、增益和帧率以专用字段为准，高级参数不能覆盖。
 
-D435 的 RGB 曝光模式、曝光值和增益以上述专用字段为准，保存时移除对应的高级参数覆盖值。此修正仅在启动时下发相机参数，保留连续流的分辨率、配置帧率、QoS 和时间戳处理，不对已采集图像做亮度后处理。实际曝光和出帧情况仍需在真机验收中检查。
+页面和 `cameras.yaml` 的曝光字段均使用微秒：D435 RGB 的 `color_exposure_us: 3900` 下发为官方 `rgb_camera.exposure: 39`（100 μs 单位），深度 `depth_exposure_us: 3900` 下发为 `depth_module.exposure: 3900`。RGB 非整百微秒值向下取整，配置仍要求不超过 5000 μs。
+
+D435 默认启用 `depth_auto_gain` 与 `color_auto_gain`，由 `camera_gain_controller` 分别读取红外图像亮度及 RGB 灰度亮度，通过官方参数服务只调整相机后续采集的增益。增益范围取驱动描述与 `depth_auto_gain_limit` / `color_auto_gain_limit` 的交集，新配置上限默认 128；旧配置中明确保存的上限保留。关闭对应开关后使用手动增益字段。D405 继续使用共享模块原生自动曝光及自动增益限制。
+
+反馈目标为 8 位灰度 128，死区 ±10；每次最多移动四个硬件增益步长，异步读取参数后再调整，调节后等待新图像。图像过期、服务未就绪、参数失败或曝光模式改变时暂停调节并报告状态。曝光值保持手动设定；达到增益上限后仍可能偏暗。状态话题为 `/<namespace>/gain_control/status`。
+
+深度自动增益需要额外启用 `infra1` 灰度流；反馈计算最多采样 64×64 个像素，最高每秒处理 10 次。原有 RGB/深度分辨率、帧率与 QoS 配置继续使用，红外传输、空间滤波与增益节点增加的开销需要在真机连续采集验收中检查。图像像素不做后期亮度增强，真实曝光中点继续保留。
 
 单相机可用参数：`serial_no`、`params_file`、`camera_name`、`namespace`、`normalize_timestamps`。管理器的 ROS domain_id 必须与相机一致。
+独立 `d435.launch.py` 用于手动曝光、手动增益测试；需要程序亮度反馈时，使用管理器或 `realsense_camera.launch.py camera_config:=...`，从机器人配置加载两路增益开关与上限。
 
-本包的 RealSense 启动入口统一设置 `temporal_filter.enable: false`，关闭深度时间滤波。
-管理器保存、加载配置时会将对应高级参数归一化为关闭，包含点分键和嵌套字典两种写法；
-单台 D405/D435 启动也会覆盖自定义 `params_file` 中的开启值。更新代码并重新启动相机后生效。
-验收脚本回读该参数，若为 true 则报告失败，缺少回读值则报告无法确认。
+本包的 RealSense 启动入口统一设置 `temporal_filter.enable: false` 和 `spatial_filter.enable: true`，关闭深度时间滤波、开启同帧空间滤波。
+管理器保存、加载配置时会将对应高级参数归一化为上述状态，包含点分键和嵌套字典两种写法；
+单台 D405/D435 启动也会覆盖自定义 `params_file` 中的相反值。更新代码并重新启动相机后生效。
+验收脚本回读这两个参数，若与要求不符则报告失败，缺少回读值则报告无法确认。
 
 [时间戳源码核查、转换公式与输出话题](docs/d405-humble-implementation.md)。
 
 [手动验收脚本与结果说明](docs/manual_acceptance.md)：按需运行 `ros2 run humanoid_camera check_cameras.py`，
 检查实际曝光、自动补偿响应、RGB/深度中点差和时间戳换算，输出终端、HTML、JSON 和 CSV 报告。
 加 `--require-equal-exposure` 后，另要求每对 RGB/深度的实际曝光时长差为 0 μs；
-曝光时长相等与曝光中点对齐分别验收。D435 若要求相同曝光设定，需将深度也改为手动曝光并与 RGB 设置一致，
-保存、重启后再以实际帧元数据验证。验收脚本只读取数据，不改变相机参数和连续采集链路。
+曝光时长相等与曝光中点对齐分别验收。D435 默认双路 3900 μs；相同帧率、相同曝光时长和 enable_sync 成组发布
+不能单独证明物理曝光同时发生，需以实际帧元数据验证。验收脚本只读取数据，不改变相机参数和连续采集链路。
 
 通用 `multi_camera.launch.py` 现在执行设备配置的 `startup`，其他品牌也随整机启动。
 例如 `backend: vendor_camera` 可同时声明 `instance_parameters`、ROS launch 步骤、

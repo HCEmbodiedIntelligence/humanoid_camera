@@ -10,8 +10,8 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from humanoid_manager.plugin_metadata import resolved_document
-from humanoid_camera.exposure import D435_RGB_MODELS, rgb_exposure_parameter
-from humanoid_camera.depth_processing import without_temporal_filter
+from humanoid_camera.exposure import D435_RGB_MODELS, rgb_exposure_parameter, override_driver_parameters
+from humanoid_camera.depth_processing import acquisition_filters
 
 
 def _parameters(camera):
@@ -74,13 +74,25 @@ def _parameters(camera):
     params.update(device_type=str(camera['device_type']), serial_no=str(camera['serial_no']),
                   camera_name=str(camera['camera_name']), enable_color=True, enable_depth=True)
     if device in D435_RGB_MODELS:
-        params.update({
+        params = override_driver_parameters(params, {
+            'enable_sync': True,
+            'depth_module.depth_profile': f'{width},{height},{fps}',
+            'rgb_camera.color_profile': f'{width},{height},{fps}',
+            'depth_module.enable_auto_exposure': False,
+            'depth_module.exposure': int(camera.get('depth_exposure_us', 3900)),
+            'depth_module.gain': int(camera.get('depth_gain', 64)),
+            'depth_module.hdr_enabled': False,
+            'hdr_merge.enable': False,
             'rgb_camera.enable_auto_exposure': False,
-            'rgb_camera.exposure': rgb_exposure_parameter(device, camera.get('color_exposure_us', 4500)),
+            'rgb_camera.exposure': rgb_exposure_parameter(device, camera.get('color_exposure_us', 3900)),
             'rgb_camera.gain': int(camera.get('color_gain', 64)),
         })
+        if camera.get('depth_auto_gain', True):
+            params = override_driver_parameters(params, {
+                'enable_infra1': True, 'depth_module.infra_profile': f'{width},{height},{fps}',
+                'depth_module.infra1_format': 'Y8'})
     # Apply after advanced parameters, including nested ROS parameter mappings.
-    return without_temporal_filter(params)
+    return acquisition_filters(params)
 
 
 def _launch(context):
@@ -108,6 +120,13 @@ def _launch(context):
         actions.append(Node(package='realsense2_camera', executable='realsense2_camera_node',
                             name=name, namespace=namespace, parameters=[parameters], remappings=image_remappings,
                             output='screen', on_exit=Shutdown(reason=f'camera {ident} exited')))
+        if camera['device_type'].lower() in D435_RGB_MODELS and any(camera.get(key, True) for key in ('depth_auto_gain', 'color_auto_gain')):
+            actions.append(Node(package='humanoid_camera', executable='gain_controller.py',
+                                name=name + '_gain_controller', namespace=namespace,
+                                parameters=[{'driver_prefix': prefix, 'rgb_topic': camera['rgb_topic'],
+                                             **{key: camera[key] for key in ('depth_auto_gain', 'color_auto_gain',
+                                                 'depth_auto_gain_limit', 'color_auto_gain_limit',
+                                                 'depth_exposure_us', 'color_exposure_us')}}], output='screen'))
         actions.append(Node(package='humanoid_camera', executable='timestamp_adapter.py',
                             name=name + '_timestamp_adapter', namespace=namespace,
                             parameters=[{'source_id': ParameterValue(ident, value_type=str),

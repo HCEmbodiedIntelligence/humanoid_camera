@@ -32,7 +32,7 @@ def test_all_cameras_disable_flat_and_nested_overrides_when_saved_and_launched(a
     original = [{'id': ident, 'device_type': model, 'serial_no': str(index),
                  'width': 1280, 'height': 720, 'fps': 15,
                  'align_depth': True, 'pointcloud': True,
-                 'parameters': {**advanced, 'spatial_filter.enable': True,
+                 'parameters': {**advanced, 'spatial_filter.enable': False, 'spatial_filter': {'enable': False, 'smooth_alpha': .6},
                                 'depth_module.depth_qos': 'SENSOR_DATA'}}
                 for index, (ident, model) in enumerate([
                     ('camera_left', 'd405'), ('camera_right', 'd405'), ('camera_hand', 'd435')])]
@@ -56,7 +56,11 @@ def test_all_cameras_disable_flat_and_nested_overrides_when_saved_and_launched(a
             assert params['enable_sync'] is True
             assert params['align_depth.enable'] is True
             assert params['pointcloud.enable'] is True
-            assert params['depth_module.auto_exposure_limit'] == 4500
+            if camera['device_type'] == 'd405':
+                assert params['depth_module.auto_exposure_limit'] == 4500
+            else:
+                assert params['depth_module.exposure'] == 3900
+            assert params['spatial_filter.smooth_alpha'] == .6
             if 'temporal_filter' in advanced and 'smooth_alpha' in advanced['temporal_filter']:
                 assert params['temporal_filter.smooth_alpha'] == .6
 
@@ -65,11 +69,11 @@ def test_all_cameras_disable_flat_and_nested_overrides_when_saved_and_launched(a
 def test_standalone_launch_overrides_custom_yaml_in_ros_parameter_parser(filename, tmp_path):
     custom = tmp_path / 'custom.yaml'
     custom.write_text(yaml.safe_dump({'/**': {'ros__parameters': {
-        'temporal_filter': {'enable': True}, 'spatial_filter.enable': True,
+        'temporal_filter': {'enable': True}, 'spatial_filter.enable': False, 'spatial_filter': {'enable': False, 'smooth_alpha': .6},
         'depth_module.depth_profile': '640,480,30'}}}))
     context = LaunchContext()
     context.launch_configurations.update(params_file=str(custom), namespace='front',
-                                         camera_name='camera', serial_no='TEST_ONLY')
+                                         camera_name='camera', serial_no='TEST_ONLY', auto_gain='true')
     description = load_launch(filename).generate_launch_description()
     driver = next(action for action in description.entities
                   if isinstance(action, Node) and action.node_package == 'realsense2_camera')
@@ -99,14 +103,15 @@ def test_standalone_launch_overrides_custom_yaml_in_ros_parameter_parser(filenam
         ros_context.shutdown()
 
 
-@pytest.mark.parametrize('value', [True, None])
-def test_acceptance_detects_enabled_or_unknown_temporal_filter(value):
+@pytest.mark.parametrize('name,value', [('temporal_filter.enable', True), ('temporal_filter.enable', None),
+                                       ('spatial_filter.enable', False), ('spatial_filter.enable', None)])
+def test_acceptance_detects_incorrect_or_unknown_filters(name, value):
     camera = validate_cameras([{'id': 'front', 'device_type': 'd405'}])[0]
     parameters = {**expected_parameters(camera), 'use_sim_time': False,
-                  'temporal_filter.enable': value}
+                  name: value}
     result = CameraCheck(camera).report(1., parameters)
-    if value is True:
-        assert result['failures']['驱动参数不符:temporal_filter.enable'] == {
-            'expected': False, 'actual': True}
+    if value is not None:
+        assert result['failures']['驱动参数不符:' + name] == {
+            'expected': not value, 'actual': value}
     else:
-        assert result['unknowns']['缺少驱动参数:temporal_filter.enable'] == 1
+        assert result['unknowns']['缺少驱动参数:' + name] == 1

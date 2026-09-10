@@ -5,8 +5,8 @@ import re
 from humanoid_manager.deployment import DeploymentError
 from humanoid_manager.configuration import validate_values
 from .identity import normalize_camera_identity
-from .exposure import D435_RGB_MODELS, rgb_exposure_parameter
-from .depth_processing import without_temporal_filter
+from .exposure import D435_RGB_MODELS, D435_EXPOSURE_US, rgb_exposure_parameter
+from .depth_processing import acquisition_filters
 
 def validate_cameras(value):
     """Validate robot-owned camera definitions without touching camera hardware."""
@@ -72,12 +72,15 @@ def validate_cameras(value):
                         raise DeploymentError(f"{ident}.{key} 必须是绝对 ROS 话题")
             result.append(camera)
             continue
+        manual_d435 = camera['device_type'].lower() in D435_RGB_MODELS
+        initial_exposure = D435_EXPOSURE_US if manual_d435 else 4500
         defaults = {
             "namespace": ident, "camera_name": "camera", "width": 640, "height": 480, "fps": 30,
             "color_format": "RGB8", "depth_format": "Z16", "align_depth": False,
-            "depth_auto_exposure": True, "depth_exposure_us": 4500, "depth_gain": 64,
-            "depth_auto_exposure_limit_us": 4500, "depth_auto_gain_limit": 64,
-            "color_auto_exposure": False, "color_exposure_us": 4500,
+            "depth_auto_exposure": not manual_d435, "depth_exposure_us": initial_exposure, "depth_gain": 64,
+            "depth_auto_exposure_limit_us": 4500, "depth_auto_gain_limit": 128 if manual_d435 else 64,
+            "color_auto_exposure": False, "color_exposure_us": initial_exposure,
+            "depth_auto_gain": manual_d435, "color_auto_gain": manual_d435, "color_auto_gain_limit": 128,
             "color_gain": 64, "parameters": {},
         }
         for key, default in defaults.items():
@@ -89,17 +92,23 @@ def validate_cameras(value):
         if endpoint in endpoints:
             raise DeploymentError(f"相机 ROS 命名空间与节点名重复: /{endpoint[0]}/{endpoint[1]}")
         endpoints.add(endpoint)
-        for key in ("align_depth", "depth_auto_exposure", "color_auto_exposure"):
+        for key in ("align_depth", "depth_auto_exposure", "color_auto_exposure", "depth_auto_gain", "color_auto_gain"):
             if type(camera[key]) is not bool:
                 raise DeploymentError(f"{ident}.{key} 必须为布尔值")
-        # D435's native RGB AE has no exposure ceiling. Existing saved versions
-        # also use manual RGB exposure when loaded under this acquisition policy.
-        if camera['device_type'].lower() in D435_RGB_MODELS:
+        # Move older D435 auto-depth configurations to the paired 3.9 ms preset.
+        if manual_d435:
+            if camera['depth_auto_exposure']:
+                camera['depth_exposure_us'] = camera['color_exposure_us'] = D435_EXPOSURE_US
+            camera['depth_auto_exposure'] = False
             camera['color_auto_exposure'] = False
+            camera['sync_rgb_depth'] = True
+        elif camera['depth_auto_gain'] or camera['color_auto_gain']:
+            raise DeploymentError(f'{ident}: 程序自动增益目前只支持 D435 系列')
         for key, low, high in (("width", 1, 8192), ("height", 1, 8192), ("fps", 1, 240),
                                ("depth_exposure_us", 1, 5000), ("depth_gain", 0, 10000),
                                ("depth_auto_exposure_limit_us", 1, 5000), ("depth_auto_gain_limit", 1, 10000),
-                               ("color_exposure_us", 1, 5000), ("color_gain", 0, 10000)):
+                               ("color_exposure_us", 1, 5000), ("color_gain", 0, 10000),
+                               ("color_auto_gain_limit", 1, 10000)):
             number = camera[key]
             if type(number) is not int or not low <= number <= high:
                 raise DeploymentError(f"{ident}.{key} 必须是 {low}–{high} 的整数")
@@ -119,10 +128,13 @@ def validate_cameras(value):
         if not isinstance(camera["parameters"], dict):
             raise DeploymentError(f"{ident}.parameters 必须为对象")
         validate_values(camera["parameters"], f"/cameras/{ident}/parameters")
-        camera['parameters'] = without_temporal_filter(camera['parameters'])
+        camera['parameters'] = acquisition_filters(camera['parameters'])
         if camera['device_type'].lower() in D435_RGB_MODELS:
-            for key in ('rgb_camera.enable_auto_exposure', 'rgb_camera.exposure', 'rgb_camera.gain'):
-                camera['parameters'].pop(key, None)
+            for group in ('rgb_camera', 'depth_module'):
+                for leaf in ('enable_auto_exposure', 'exposure', 'gain'):
+                    camera['parameters'].pop(group + '.' + leaf, None)
+                    if isinstance(camera['parameters'].get(group), dict):
+                        camera['parameters'][group].pop(leaf, None)
         result.append(camera)
     active_realsense = [x for x in result if x["backend"] == "realsense" and x["enabled"]]
     if len(active_realsense) > 1 and any(not x["serial_no"] for x in active_realsense):

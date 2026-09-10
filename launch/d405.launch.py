@@ -7,6 +7,7 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch.conditions import IfCondition
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
+from humanoid_camera.depth_processing import DEPTH_FILTER_PARAMETERS
 
 
 def generate_launch_description():
@@ -24,6 +25,6 @@ def generate_launch_description():
         Node(package='realsense2_camera',executable='realsense2_camera_node',
             name=LaunchConfiguration('camera_name'),namespace=LaunchConfiguration('namespace'),
             parameters=[LaunchConfiguration('params_file'),{
-                'temporal_filter.enable': False,
+                **DEPTH_FILTER_PARAMETERS,
                 'camera_name':ParameterValue(LaunchConfiguration('camera_name'),value_type=str),
                 'serial_no':ParameterValue(LaunchConfiguration('serial_no'),value_type=str)}],output='screen')])

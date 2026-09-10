@@ -1,10 +1,14 @@
-"""Depth temporal filtering is disabled for acquisition at startup."""
+"""Acquisition uses spatial depth filtering without temporal history."""
+
+DEPTH_FILTER_PARAMETERS = {'temporal_filter.enable': False, 'spatial_filter.enable': True}
 
 
-def without_temporal_filter(parameters):
+def acquisition_filters(parameters):
     """Override both ROS parameter spellings without changing other settings."""
     result = dict(parameters)
-    if isinstance(result.get('temporal_filter'), dict):
-        result['temporal_filter'] = {**result['temporal_filter'], 'enable': False}
-    result['temporal_filter.enable'] = False
+    for key, enabled in DEPTH_FILTER_PARAMETERS.items():
+        group = key.split('.')[0]
+        if isinstance(result.get(group), dict):
+            result[group] = {**result[group], 'enable': enabled}
+        result[key] = enabled
     return result

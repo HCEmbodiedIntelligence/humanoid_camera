@@ -20,6 +20,7 @@
     pointcloud.stream_index_filter: 0
     align_depth.enable: false
     temporal_filter.enable: false
+    spatial_filter.enable: true
     hdr_merge.enable: false
     depth_module.hdr_enabled: false
     publish_tf: true

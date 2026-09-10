@@ -1,6 +1,18 @@
 """Conversions between configured microseconds and vendor parameter units."""
 
 D435_RGB_MODELS = frozenset({'d435', 'd435i', 'd435f', 'd435if'})
+D435_EXPOSURE_US = 3900
+
+
+def override_driver_parameters(parameters, overrides):
+    """Override dotted and nested ROS spellings consistently."""
+    result = dict(parameters)
+    for name, value in overrides.items():
+        group, _, child = name.partition('.')
+        if child and isinstance(result.get(group), dict):
+            result[group] = {**result[group], child: value}
+        result[name] = value
+    return result
 
 
 def rgb_exposure_parameter(device_type, exposure_us):
