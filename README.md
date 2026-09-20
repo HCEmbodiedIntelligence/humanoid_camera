@@ -83,3 +83,17 @@ D435 默认启用 `depth_auto_gain` 与 `color_auto_gain`，由 `camera_gain_con
 `rgbd_topic` 与 `metadata_topic`；变量写作 `${name}`。不声明 startup 时连接外部已有话题。
 RealSense 兼容配置独立在 `realsense_camera.launch.py` 和 `realsense_profile.py` 中；
 使用该 profile 时请安装 `realsense2_camera` 和 `realsense2_camera_msgs`，通用相机包不再强制依赖它们。
+
+## 相机权限与重复错误
+
+RealSense 启动前会检查检测到的 Intel RealSense USB、video、media、hidraw 节点读写权限。设备未连接或无权限时，暂不执行厂商驱动，每 5 秒复查、每 60 秒最多一条提示，避免驱动枚举反复打印权限错误。权限就绪后执行原厂驱动。关闭 launch 会同时退出等待进程。
+
+如果当前用户属于 `plugdev`，可在**停止机器人/相机节点之后**执行：
+
+```bash
+sudo bash /home/hc_op/workspace/teleop_ws/src/humanoid_camera/scripts/install_camera_permissions.sh
+```
+
+脚本将规则安装到 `/etc/udev/rules.d/99-humanoid-realsense.rules`，只匹配 Intel RealSense，把设备设置为 `plugdev` 组、`0660` 权限，然后重载并针对这些设备应用规则。不会启动或重启节点。非 `plugdev` 用户需由管理员加入该组，并重新登录后启动进程。规则文件随包安装，脚本也可从安装目录执行。
+
+自动增益在没有新鲜图像时不查询驱动参数；服务错误或超时后等待 30 秒再尝试，重复状态日志限频 30 秒。时间戳适配器的重复错误同样限频 30 秒。启动检查不替代硬件故障处理；运行中拔插设备由厂商驱动处理。

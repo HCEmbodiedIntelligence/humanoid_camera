@@ -1,0 +1,5 @@
+# Grant the existing plugdev group access only to Intel RealSense devices.
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="8086", ATTR{product}=="*RealSense*", GROUP="plugdev", MODE="0660"
+SUBSYSTEM=="video4linux", SUBSYSTEMS=="usb", ATTRS{idVendor}=="8086", ATTRS{product}=="*RealSense*", GROUP="plugdev", MODE="0660"
+SUBSYSTEM=="media", SUBSYSTEMS=="usb", ATTRS{idVendor}=="8086", ATTRS{product}=="*RealSense*", GROUP="plugdev", MODE="0660"
+SUBSYSTEM=="hidraw", SUBSYSTEMS=="usb", ATTRS{idVendor}=="8086", ATTRS{product}=="*RealSense*", GROUP="plugdev", MODE="0660"

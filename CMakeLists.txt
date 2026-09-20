@@ -9,3 +9,6 @@ install(PROGRAMS scripts/timestamp_adapter.py scripts/check_cameras.py scripts/g
 install(PROGRAMS start_camera.sh start_cameras.sh DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY docs DESTINATION share/${PROJECT_NAME})
 ament_package()
+
+install(DIRECTORY rules DESTINATION share/${PROJECT_NAME})
+install(PROGRAMS scripts/install_camera_permissions.sh DESTINATION lib/${PROJECT_NAME})

@@ -1,4 +1,6 @@
 """RealSense provider: official driver plus timestamp adapter."""
+import shlex
+import sys
 from pathlib import Path
 import re
 
@@ -121,7 +123,7 @@ def _launch(context):
                       for key, value in _parameters(camera).items()}
         image_remappings = [(prefix + '/' + suffix, camera[key]) for key, suffix in (
             ('rgb_topic', 'color/image_raw'), ('depth_topic', 'depth/image_rect_raw'))]
-        actions.append(Node(package='realsense2_camera', executable='realsense2_camera_node',
+        actions.append(Node(prefix=[shlex.quote(sys.executable) + ' -m humanoid_camera.permission_guard'], package='realsense2_camera', executable='realsense2_camera_node',
                             name=name, namespace=namespace, parameters=[parameters], remappings=image_remappings,
                             output='screen', on_exit=Shutdown(reason=f'camera {ident} exited')))
         if camera['device_type'].lower() in D435_RGB_MODELS and any(camera.get(key, True) for key in ('depth_auto_gain', 'color_auto_gain')):

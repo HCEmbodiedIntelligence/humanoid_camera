@@ -110,3 +110,16 @@ def test_feedback_uses_driver_ranges_writes_only_gains_and_pauses_on_exposure_ch
         controller.destroy_node()
         driver.destroy_node()
         rclpy.shutdown()
+
+
+def test_no_image_means_no_gain_parameter_requests():
+    path = Path(__file__).resolve().parents[1] / 'scripts/gain_controller.py'
+    spec = importlib.util.spec_from_file_location('gain_controller_no_image', path)
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    requests=[]
+    client=SimpleNamespace(service_is_ready=lambda: True)
+    fake=SimpleNamespace(retry_after=0., future=None, streams={'depth':'depth_module'}, samples={}, ranges={},
+        describe_client=client, get_client=client, set_client=client,
+        status=lambda *_: None, request=lambda *args: requests.append(args))
+    for _ in range(1000): module.GainController.advance(fake)
+    assert requests == []

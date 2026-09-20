@@ -1,4 +1,6 @@
 """Launch one D435 using the official driver and the timestamp adapter."""
+import shlex
+import sys
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -26,7 +28,7 @@ def generate_launch_description():
                           'config_file': LaunchConfiguration('params_file'),
                           'driver_prefix': PathJoinSubstitution(['/', LaunchConfiguration('namespace'), LaunchConfiguration('camera_name')])}],
              condition=IfCondition(LaunchConfiguration('normalize_timestamps')), output='screen'),
-        Node(package='realsense2_camera', executable='realsense2_camera_node',
+        Node(prefix=[shlex.quote(sys.executable) + ' -m humanoid_camera.permission_guard'], package='realsense2_camera', executable='realsense2_camera_node',
              name=LaunchConfiguration('camera_name'), namespace=LaunchConfiguration('namespace'),
              parameters=[INFRARED_DEFAULTS, driver_qos_parameters(), LaunchConfiguration('params_file'), {
                  **DEPTH_FILTER_PARAMETERS,

@@ -138,7 +138,7 @@ class TimestampAdapter(Node):
             times={k:midpoint(raw[k]) for k in raw}
         except (KeyError,ValueError,TypeError) as error:
             self.diagnostics.discard('invalid_metadata',parts)
-            self.get_logger().warning(str(error),throttle_duration_sec=5.)
+            self.get_logger().warning(str(error),throttle_duration_sec=30.)
             return
         sensor=int(raw['rgb']['sensor_timestamp'])
         if self.last_sensor is not None and sensor<self.last_sensor-250_000 and self.last_sensor-sensor<2**31:

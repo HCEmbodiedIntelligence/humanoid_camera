@@ -30,6 +30,7 @@ class GainController(Node):
         self.future = self.operation = None
         self.deadline = 0.
         self.status_text = ''
+        self.retry_after = 0.
         self.get_client = self.create_client(GetParameters, prefix + '/get_parameters')
         self.describe_client = self.create_client(DescribeParameters, prefix + '/describe_parameters')
         self.set_client = self.create_client(SetParameters, prefix + '/set_parameters')
@@ -42,7 +43,7 @@ class GainController(Node):
     def status(self, state, **details):
         self.status_pub.publish(String(data=json.dumps({'state': state, **details}, ensure_ascii=False)))
         if state != self.status_text:
-            self.get_logger().info(state)
+            self.get_logger().info(state, throttle_duration_sec=30.)
             self.status_text = state
 
     def receive(self, stem, message):
@@ -72,15 +73,19 @@ class GainController(Node):
         except Exception as error:
             self.future = self.operation = None
             self.ranges.clear()
+            self.retry_after = time.monotonic() + 30.
             self.status('自动增益暂停: ' + str(error))
 
     def advance(self):
+        if time.monotonic() < self.retry_after:
+            return
         if self.future is not None:
             if not self.future.done():
                 if time.monotonic() > self.deadline:
                     self.future.cancel()
                     self.future = self.operation = None
                     self.ranges.clear()
+                    self.retry_after = time.monotonic() + 30.
                     self.status('自动增益暂停: 驱动参数服务超时')
                 return
             response, operation = self.future.result(), self.operation
@@ -107,6 +112,9 @@ class GainController(Node):
         if not all(client.service_is_ready() for client in (self.describe_client, self.get_client, self.set_client)):
             self.ranges.clear()
             self.status('等待相机驱动参数服务')
+            return
+        if not all(stem in self.samples and time.monotonic() - self.samples[stem][0] <= .5 for stem in self.streams):
+            self.status('等待新鲜相机图像，暂停参数查询')
             return
         if not self.ranges:
             names = [module + '.gain' for module in self.streams.values()]
