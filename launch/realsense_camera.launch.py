@@ -137,6 +137,7 @@ def _launch(context):
                             name=name + '_timestamp_adapter', namespace=namespace,
                             parameters=[{'source_id': ParameterValue(ident, value_type=str),
                                          'config_file': ParameterValue(str(config_path), value_type=str),
+                                         'source_depth_format': parameters['depth_module.depth_format'],
                                          'driver_prefix': ParameterValue(prefix, value_type=str)}],
                             remappings=image_remappings + [('normalized/' + suffix, camera[key]) for key, suffix in (
                                 ('rgbd_topic', 'rgbd'), ('metadata_topic', 'metadata'),

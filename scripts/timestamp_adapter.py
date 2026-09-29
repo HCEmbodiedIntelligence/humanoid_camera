@@ -17,6 +17,7 @@ from realsense2_camera_msgs.msg import Metadata, RGBD
 from std_msgs.msg import String
 from humanoid_camera.pipeline_diagnostics import PipelineDiagnostics
 from humanoid_camera.transport import CaptureSubscription, capture_qos
+from humanoid_camera.depth_source import installed_driver_version, realsense_ros_depth_profile
 
 
 def ns(header):
@@ -49,6 +50,9 @@ class TimestampAdapter(Node):
             raise ValueError('RealSense GLOBAL_TIME normalization requires the ROS system time domain')
         self.source=self.declare_parameter('source_id','front').value
         self.base=self.declare_parameter('driver_prefix','/front/camera').value.rstrip('/')
+        self.depth_format=self.declare_parameter('source_depth_format','unverified').value
+        self.driver_version=installed_driver_version()
+        self.depth_source_profile=realsense_ros_depth_profile(self.driver_version,self.depth_format)
         config_file=self.declare_parameter('config_file','').value
         self.config_id=hashlib.sha256(Path(config_file).read_bytes()).hexdigest() if config_file else 'configuration_file_unavailable'
         self.limit=self.declare_parameter('buffer_bytes',64*1024*1024).value
@@ -175,7 +179,13 @@ class TimestampAdapter(Node):
         d['clock_model_id']=d['rgb']['clock_model_id']
         d['calibration']={k:{'k':list(v.k),'d':list(v.d),'r':list(v.r),'p':list(v.p),'width':v.width,'height':v.height,'distortion_model':v.distortion_model,'frame_id':v.header.frame_id} for k,v in self.infos.items()}
         d['calibration_id']=hashlib.sha256(json.dumps(d['calibration'],sort_keys=True).encode()).hexdigest() if d['calibration'] else 'unavailable'
-        d['depth'].update(depth_scale=.001,invalid_value=0)
+        profile=deepcopy(getattr(self,'depth_source_profile',None))
+        d['depth'].update(source_profile=profile,
+            depth_scale=profile['scale_m_per_unit'] if profile else None,
+            invalid_value=profile['invalid_values'][0] if profile else None,
+            encoding=out.depth.encoding,is_bigendian=bool(out.depth.is_bigendian),row_step=out.depth.step,
+            driver_version=getattr(self,'driver_version',None),
+            driver_depth_format=getattr(self,'depth_format',None))
         out.header=deepcopy(out.rgb.header)
         self.meta_pub.publish(Metadata(header=out.header,json_data=json.dumps(d)))
         self.pair_pub.publish(out)

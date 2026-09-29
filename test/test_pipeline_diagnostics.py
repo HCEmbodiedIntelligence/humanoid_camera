@@ -42,7 +42,8 @@ def test_rates_use_the_producer_window_and_restart_starts_a_new_window():
         check.pipeline({**restarted, 'uptime_sec': float('nan')})
 
 
-def test_adapter_reports_missing_rgb_on_eviction_and_preserves_complete_pair():
+@pytest.mark.parametrize('verified_source', [False, True])
+def test_adapter_reports_missing_rgb_on_eviction_and_preserves_complete_pair(verified_source):
     pytest.importorskip('rclpy')
     from sensor_msgs.msg import Image
     from realsense2_camera_msgs.msg import Metadata
@@ -58,6 +59,10 @@ def test_adapter_reports_missing_rgb_on_eviction_and_preserves_complete_pair():
                bytes=0, seq=0, epoch=0, last_sensor=None, clock_id='test-instance', config_id='TEST_ONLY',
                diagnostics=stats, get_clock=lambda: Obj(now=lambda: Obj(nanoseconds=1_780_000_000_100_000_000)),
                pair_pub=Obj(publish=images.append), meta_pub=Obj(publish=metadata.append))
+    from humanoid_camera.depth_source import realsense_ros_depth_profile
+    node.driver_version = '4.57.7' if verified_source else 'unverified'
+    node.depth_format = 'Z16'
+    node.depth_source_profile = realsense_ros_depth_profile(node.driver_version, node.depth_format)
 
     def messages(index):
         h = Header(frame_id='optical')
@@ -89,6 +94,10 @@ def test_adapter_reports_missing_rgb_on_eviction_and_preserves_complete_pair():
     produced = json.loads(metadata[0].json_data)
     raw = json.loads(pair['rgb_meta'].json_data)
     assert produced['rgb']['raw_metadata'] == raw
+    assert produced['depth']['source_profile'] == node.depth_source_profile
+    assert produced['depth']['depth_scale'] == (.001 if verified_source else None)
+    assert produced['depth']['encoding'] == '16UC1'
+    assert produced['depth']['driver_version'] == node.driver_version
     assert adapter.ns(images[0].rgb.header) == adapter.midpoint(raw)[0]
     # A late cloud with no image parts does not inflate missing-image counts.
     before = dict(stats.missing)
