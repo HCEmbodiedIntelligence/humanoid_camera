@@ -59,9 +59,12 @@ def test_saved_photos_preserve_pixels_and_record_matching_frame_evidence(tmp_pat
     colored = np.array(Image.open(tmp_path / saved['files']['depth_color']))
     assert colored.shape == (2, 2, 3)
     np.testing.assert_array_equal(colored[0, 0], [0, 0, 0])
-    np.testing.assert_array_equal(colored[0, 1], [0, 0, 255])
-    assert saved['depth_color_scale']['min_m'] == .2
-    assert saved['depth_color_scale']['max_m'] == 2.
+    from humanoid_camera.depth_visualization import depth_color_preview
+    np.testing.assert_array_equal(colored, depth_color_preview(depth.astype(np.uint16))[0])
+    assert saved['depth_color_scale']['min_m'] is None
+    assert saved['depth_color_scale']['max_m'] is None
+    assert saved['depth_color_scale']['range_mode'] == 'per_frame_histogram'
+    assert saved['depth_color_scale']['meters_per_raw_unit'] is None
     assert saved['observations']['depth']['source_data_sha256'] == hashlib.sha256(image.depth.data).hexdigest()
     for name, digest in saved['sha256'].items():
         assert hashlib.sha256((tmp_path / saved['files'][name]).read_bytes()).hexdigest() == digest
@@ -133,6 +136,41 @@ def test_rgb_bgr_and_invalid_size_are_handled_without_modifying_input():
     image.rgb.step = 2
     with pytest.raises(ValueError):
         pixels(image.rgb)
+
+
+@pytest.mark.parametrize('verified_units', [False, True])
+def test_fixed_metric_preview_requires_matching_verified_driver_units(tmp_path, verified_units):
+    from humanoid_camera.depth_source import realsense_ros_depth_profile
+    camera, image, metadata, stamp_ns = frame()
+    if verified_units:
+        metadata['depth'].update(driver_version='4.57.7', driver_depth_format='Z16', depth_scale=.001,
+                                 source_profile=realsense_ros_depth_profile('4.57.7', 'Z16'))
+    writer = EvidenceRecorder(tmp_path, depth_min_m=.2, depth_max_m=2.)
+    writer.metadata_received(camera, metadata, stamp_ns)
+    writer.image_received(camera, image, 0.)
+    result = writer.close()
+    item = result['saved'][0]
+    assert 'depth' in item['files'] and 'rgb' in item['files']
+    assert ('depth_color' in item['files']) == verified_units
+    if verified_units:
+        assert item['depth_color_scale']['meters_per_raw_unit'] == .001
+        assert item['depth_color_scale']['range_mode'] == 'fixed'
+    else:
+        assert any('源深度单位' in error for error in result['errors'])
+
+
+def test_sdk_mismatch_keeps_raw_images_and_reports_preview_failure(tmp_path, monkeypatch):
+    from humanoid_camera import depth_visualization
+    monkeypatch.setattr(depth_visualization, 'version', lambda _: 'unsupported')
+    camera, image, metadata, stamp_ns = frame()
+    writer = EvidenceRecorder(tmp_path)
+    writer.metadata_received(camera, metadata, stamp_ns)
+    writer.image_received(camera, image, 0.)
+    result = writer.close()
+    saved = result['saved'][0]
+    assert any('SDK' in error for error in result['errors'])
+    assert set(saved['files']) >= {'rgb', 'depth', 'metadata'}
+    assert 'depth_color' not in saved['files'] and 'depth_preview' not in saved['files']
 
 
 @pytest.mark.parametrize('ending', ['failed_check', 'interrupt', 'runtime_error'])

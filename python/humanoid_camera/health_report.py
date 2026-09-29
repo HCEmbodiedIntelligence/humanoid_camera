@@ -180,8 +180,8 @@ def write_report(report, root, *, destination=None):
     evidence = report.get('evidence', {})
     if evidence.get('enabled'):
         parts.append('<section><h2>真实图像抽样证据</h2><p>RGB 为无损 PNG；深度数值 PNG 原样保存接收到的16位数值（包含当前驱动滤波结果）。'
-                     '彩色预览用颜色表示深度：红色近、蓝色远、黑色无有效深度；色标按 ROS 16UC1 毫米编码换算为米，不代表独立精度标定。'
-                     '灰度预览按每帧有效数值拉伸。照片取自同一条 RGBD 消息；'
+                     '深度预览使用 RealSense 官方着色，黑色表示无有效深度。默认逐帧动态直方图，颜色没有固定米刻度；物理测量应读取源数值及已确认的单位。'
+                     '固定范围须有来源单位依据，显示设置记录在逐帧 JSON。照片取自同一条 RGBD 消息；'
                      '曝光与增益仅在来源元数据逐帧匹配时展示。单张照片不能证明连续帧率或物理同步精度。</p>')
         if not evidence.get('saved'):
             parts.append('<p class="FAIL">未保存到照片证据，请查看接收计数和错误；本报告不能充当有图像证据的验收。</p>')
@@ -198,7 +198,7 @@ def write_report(report, root, *, destination=None):
                     url = escape(files[key])
                     parts.append(f'<figure style="margin:0;max-width:46%"><a href="{url}"><img src="{url}" style="width:100%" alt="{label}"></a><figcaption>{label}</figcaption>')
                     if key == 'depth_color' and 'depth_color_legend' in files:
-                        parts.append(f'<img src="{escape(files["depth_color_legend"])}" style="width:100%" alt="深度距离色标">')
+                        parts.append(f'<img src="{escape(files["depth_color_legend"])}" style="width:100%" alt="RealSense 官方显示说明">')
                     parts.append('</figure>')
             parts.append('</div><table><tr><th>流</th><th>来源帧号</th><th>图像时间戳 ns</th><th>曝光 μs</th><th>增益</th></tr>')
             for stream in ('rgb', 'depth'):

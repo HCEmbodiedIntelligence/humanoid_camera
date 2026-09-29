@@ -1,0 +1,2 @@
+# Official SDK for offline software-device colorization; no custom palette fallback.
+pyrealsense2==2.58.4.10922

@@ -52,21 +52,12 @@ def pixels(message, *, depth=False):
 
 
 def depth_preview(depth):
-    valid = depth[depth != 0]
-    preview = np.zeros(depth.shape, dtype=np.uint8)
-    if valid.size == 0:
-        return preview, {'min_raw': None, 'max_raw': None, 'zero_is_invalid': True}
-    low, high = (float(value) for value in np.percentile(valid, (2, 98)))
-    if high <= low:
-        preview[depth != 0] = 128
-    else:
-        scaled = 32 + np.clip((depth.astype(np.float32) - low) / (high - low), 0, 1) * 223
-        preview[depth != 0] = scaled[depth != 0].astype(np.uint8)
-    return preview, {'min_raw': low, 'max_raw': high, 'zero_is_invalid': True}
+    preview, profile = depth_color_preview(depth, color_scheme=2)
+    return preview[:, :, 0], profile
 
 
 class EvidenceRecorder:
-    def __init__(self, directory, *, interval=10., max_pairs=6, depth_min_m=.2, depth_max_m=2.):
+    def __init__(self, directory, *, interval=10., max_pairs=6, depth_min_m=None, depth_max_m=None):
         self.directory = Path(directory)
         self.depth_scale = color_scale(depth_min_m, depth_max_m)
         self.interval, self.max_pairs = interval, max_pairs
@@ -140,6 +131,17 @@ class EvidenceRecorder:
         errors = []
         files = {}
         preview_range = None
+        display_profile = self.depth_scale
+        matched = (isinstance(metadata, dict) and metadata.get('source_id') == ident
+                   and metadata.get('capture_time_ns') == stamp(message.header)
+                   and all(isinstance(metadata.get(stream), dict)
+                           and metadata[stream].get('capture_time_ns') == stamp(getattr(message, stream).header)
+                           for stream in ('rgb', 'depth')))
+        from .depth_source import realsense_ros_depth_profile
+        source_depth = metadata['depth'] if matched else {}
+        known_profile = realsense_ros_depth_profile(source_depth.get('driver_version'), source_depth.get('driver_depth_format'))
+        known_scale = (.001 if known_profile is not None and source_depth.get('source_profile') == known_profile
+                       and source_depth.get('depth_scale') == .001 and message.depth.encoding == '16UC1' else None)
         for stream in ('rgb', 'depth'):
             try:
                 data = pixels(getattr(message, stream), depth=stream == 'depth')
@@ -149,7 +151,7 @@ class EvidenceRecorder:
                     preview, preview_range = depth_preview(data)
                     Image.fromarray(preview).save(directory / 'depth_preview.png', compress_level=1)
                     files['depth_preview'] = str(relative / 'depth_preview.png')
-                    colored, _ = depth_color_preview(data, self.depth_scale['min_m'], self.depth_scale['max_m'])
+                    colored, display_profile = depth_color_preview(data, self.depth_scale['min_m'], self.depth_scale['max_m'], scale_m_per_unit=known_scale)
                     Image.fromarray(colored).save(directory / 'depth_color.png', compress_level=1)
                     files['depth_color'] = str(relative / 'depth_color.png')
                     depth_color_legend(self.depth_scale['min_m'], self.depth_scale['max_m'], data.shape[1]).save(
@@ -157,11 +159,6 @@ class EvidenceRecorder:
                     files['depth_color_legend'] = str(relative / 'depth_color_legend.png')
             except Exception as error:
                 errors.append(stream + ': ' + str(error))
-        matched = (isinstance(metadata, dict) and metadata.get('source_id') == ident
-                   and metadata.get('capture_time_ns') == stamp(message.header)
-                   and all(isinstance(metadata.get(stream), dict)
-                           and metadata[stream].get('capture_time_ns') == stamp(getattr(message, stream).header)
-                           for stream in ('rgb', 'depth')))
         observations = {}
         for stream in ('rgb', 'depth'):
             image = getattr(message, stream)
@@ -182,8 +179,8 @@ class EvidenceRecorder:
                   'pair_header_ns': stamp(message.header), 'observations': observations,
                   'metadata_status': 'matched' if matched else 'missing_or_mismatched',
                   'depth_preview_range': preview_range, 'files': files, 'errors': errors,
-                  'depth_color_scale': self.depth_scale,
-                  'pixel_processing': 'RGB PNG lossless; depth PNG preserves received uint16 values; preview is scaled for display',
+                  'depth_color_scale': display_profile,
+                  'pixel_processing': 'RGB PNG lossless; depth PNG preserves received uint16 values; previews use official RealSense colorizer',
                   'camera_config_id': metadata.get('camera_config_id') if matched else None,
                   'configuration': {key: camera[key] for key in (
                       'width', 'height', 'fps', 'depth_auto_exposure', 'color_auto_exposure',

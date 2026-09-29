@@ -88,7 +88,9 @@ ros2 run humanoid_camera check_cameras.py \
 - `evidence/<相机ID>/<样本编号>/rgb.png`：原分辨率无损 RGB 照片。
 - 同目录 `depth.png`：收到的 16 位深度数值，包含当前驱动滤波结果；不是未滤波的传感器数据。
 - 同目录 `depth_preview.png`：供人眼查看的灰度预览，零值为黑色；显示范围记录在 `frame.json`，不表示米制距离。
-- 同目录 `depth_color.png`：深度伪彩色图，红近、蓝远、零值为黑色；`depth_color_legend.png` 是对应距离色标。
+- 同目录 `depth_color.png`：调用 RealSense 官方 SDK 的 Dynamic/Jet 着色，开启逐帧直方图均衡，零值为黑色。颜色不能当固定距离刻度；`depth_color_legend.png` 说明显示模式。`depth_preview.png` 使用 SDK 的 White to Black，未使用手写灰度或色带。
+- 保存预览需要 `requirements-preview.txt` 固定的 pyrealsense2 版本；缺少 SDK 时报告预览错误并保留原 RGB/深度 PNG，不使用自定义回退。
+- 默认不设米范围。显式同时提供 `--depth-preview-min-m/--depth-preview-max-m` 时使用 SDK 固定范围模式，仅当已匹配元数据包含受支持驱动的单位依据才允许。源单位未知仍可作动态直方图显示，但不声称物理距离。
 - 同目录 `frame.json`：RGB/深度各自的来源帧号、图像时间戳、曝光原始值及 μs 换算值、增益、源元数据和文件 SHA-256。
 - `frame_events.csv`：每台相机的原始 RGB/深度元数据、标准化元数据、RGBD 图像接收记录；同样保存在 `report.json` 的 `frame_trace` 中。
 
@@ -99,12 +101,10 @@ ros2 run humanoid_camera check_cameras.py \
 `receive_ns` 是检查器记录的 ROS 接收时刻，`adapter_group_ns` 是适配节点四份图像/元数据凑齐后的时刻，
 SDK 到达字段保留原单位 ms。这些阶段时刻不等于物理曝光时刻。旧报告无法补回未记录的逐帧信息。
 
-报告优先显示彩色深度图。彩色图默认固定使用 0.2–2.0 m 范围，超出范围的有效值显示端点颜色，
-同一个深度值在不同帧使用同一种颜色。可用 `--depth-preview-min-m 0.05 --depth-preview-max-m 0.6`
-调整近距离场景的显示范围，不改变曝光、深度数值、ROS 话题或验收阈值。
-米制色标依据 ROS 16UC1 毫米编码（[REP 118](https://github.com/ros-infrastructure/rep/blob/master/rep-0118.rst)），
-不是独立精度标定；显示设置、单位和所有预览文件哈希保存在逐帧 JSON 中。
-RealSense Viewer 也对深度做伪彩色显示，色图、范围、直方图均衡不同会导致颜色不同。
+报告优先显示官方 Dynamic/Jet 彩色深度图。可用 `--depth-preview-min-m 0.05 --depth-preview-max-m 0.6`
+选择官方固定范围显示，但只有本帧匹配的来源元数据确认单位后才允许；不从 uint16 类型推断毫米。
+显示设置、已确认单位或未知状态及所有预览文件哈希保存在逐帧 JSON 中，不代表独立精度标定。
+使用官方 SDK 默认选项做逐像素测试，不承诺与选项不同的 RealSense Viewer 窗口同色。
 `depth.png` 是给程序使用的 16 位深度数值，普通查看器显示很暗属于常见显示方式差异。
 
 RGB 与深度取自同一条 RGBD 消息，保留各自时间戳。只有照片和元数据逐帧匹配时才填写曝光与增益，

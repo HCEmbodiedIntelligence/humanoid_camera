@@ -165,17 +165,19 @@ def main():
     parser.add_argument('--save-evidence', action='store_true', help='保存真实RGB/深度PNG及逐帧证据，并打包ZIP；同时启用图像验证')
     parser.add_argument('--evidence-interval', type=float, default=10., help='每台相机抽样照片间隔秒数，默认10')
     parser.add_argument('--evidence-max-pairs', type=int, default=6, help='每台最多保存多少对照片，默认6')
-    parser.add_argument('--depth-preview-min-m', type=float, default=.2, help='深度伪彩色显示下限（米），默认0.2；不影响采集数据')
-    parser.add_argument('--depth-preview-max-m', type=float, default=2., help='深度伪彩色显示上限（米），默认2.0；不影响采集数据')
+    parser.add_argument('--depth-preview-min-m', type=float, help='官方固定范围下限（米），须同时提供上限和已确认源单位；默认官方动态直方图')
+    parser.add_argument('--depth-preview-max-m', type=float, help='官方固定范围上限（米）；不影响采集数据')
     args = parser.parse_args()
     if (not math.isfinite(args.duration) or not 1 <= args.duration <= 3600 or
             not math.isfinite(args.warmup) or not 0 <= args.warmup <= 60 or
             not math.isfinite(args.max_age_ms) or args.max_age_ms <= 0 or not 0 <= args.domain_id <= 232 or
             not math.isfinite(args.evidence_interval) or args.evidence_interval < 1 or not 1 <= args.evidence_max_pairs <= 120):
         parser.error('无效采样时长、等待时间、延迟阈值或 domain_id')
-    if not (math.isfinite(args.depth_preview_min_m) and math.isfinite(args.depth_preview_max_m)
-            and 0 <= args.depth_preview_min_m < args.depth_preview_max_m <= 65.535):
-        parser.error('深度预览范围必须满足 0 ≤ 最小值 < 最大值 ≤ 65.535 m')
+    from humanoid_camera.depth_visualization import color_scale
+    try:
+        color_scale(args.depth_preview_min_m, args.depth_preview_max_m)
+    except ValueError as error:
+        parser.error(str(error))
     try:
         import yaml
         from humanoid_camera.configuration import validate_cameras
