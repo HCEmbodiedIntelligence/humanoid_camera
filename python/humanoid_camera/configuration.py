@@ -43,9 +43,19 @@ def validate_cameras(value):
             old.update(new)
     for camera in result:
         ident = camera['id']
+        camera.setdefault('depth_enabled', True)
+        if type(camera['depth_enabled']) is not bool:
+            raise DeploymentError(f'{ident}.depth_enabled 必须为布尔值')
+        if not camera['depth_enabled']:
+            if camera.get('pointcloud') or camera.get('align_depth'):
+                raise DeploymentError(f'{ident}: 关闭深度时请同时关闭点云和深度空间对齐')
+            camera['sync_rgb_depth'] = False
+            camera['depth_auto_gain'] = False
         for key in ('enabled', 'required', 'pointcloud'):
             if type(camera[key]) is not bool:
                 raise DeploymentError(f'{ident}.{key} 必须为布尔值')
+        if 'allow_camera_repeat' in camera and type(camera['allow_camera_repeat']) is not bool:
+            raise DeploymentError(f'{ident}.allow_camera_repeat 必须为布尔值')
         camera.setdefault('max_actual_exposure_us', 5000)
         exposure = camera['max_actual_exposure_us']
         if type(exposure) is not int or not 1 <= exposure <= 5000:

@@ -25,6 +25,7 @@ def generate_launch_description():
         Node(package='humanoid_camera', executable='timestamp_adapter.py',
              name='timestamp_adapter', namespace=LaunchConfiguration('namespace'),
              parameters=[{'source_id': LaunchConfiguration('namespace'),
+                          'device_type': 'd435',
                           'config_file': LaunchConfiguration('params_file'),
                           'driver_prefix': PathJoinSubstitution(['/', LaunchConfiguration('namespace'), LaunchConfiguration('camera_name')])}],
              condition=IfCondition(LaunchConfiguration('normalize_timestamps')), output='screen'),

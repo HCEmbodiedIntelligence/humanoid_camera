@@ -81,7 +81,6 @@ def _parameters(camera):
                   camera_name=str(camera['camera_name']), enable_color=True, enable_depth=True)
     if device in D435_RGB_MODELS:
         params = override_driver_parameters(params, {
-            'enable_sync': True,
             'depth_module.depth_profile': f'{width},{height},{fps}',
             'rgb_camera.color_profile': f'{width},{height},{fps}',
             'depth_module.enable_auto_exposure': False,
@@ -98,7 +97,15 @@ def _parameters(camera):
                 'enable_infra1': True, 'depth_module.infra_profile': f'{width},{height},{fps}',
                 'depth_module.infra1_format': 'Y8'})
     # Apply after advanced parameters, including nested ROS parameter mappings.
-    return acquisition_filters(params)
+    if not camera.get('depth_enabled', True):
+        params = override_driver_parameters(params, {
+            'enable_depth': False, 'enable_sync': False,
+            'enable_infra1': False, 'enable_infra2': False,
+            'pointcloud.enable': False, 'align_depth.enable': False,
+        })
+    sdk_sync = bool(camera.get('sync_rgb_depth', True) and camera.get('depth_enabled', True))
+    params = override_driver_parameters(params, {'enable_sync': sdk_sync})
+    return acquisition_filters(params, sdk_sync=sdk_sync)
 
 
 def _launch(context):
@@ -109,6 +116,10 @@ def _launch(context):
     from humanoid_camera.configuration import validate_cameras
     document['cameras'] = validate_cameras(document['cameras'])
     enabled = [c for c in document['cameras'] if not c.get('startup') and c.get('enabled', True) and c.get('backend', 'realsense') == 'realsense']
+    if enabled:
+        from ament_index_python.packages import get_package_share_directory
+        if not (Path(get_package_share_directory('realsense2_camera'))/'atomic_capture_v1').is_file():
+            raise RuntimeError('RealSense 原子采集驱动未安装，请按 humanoid_camera/docs/atomic_capture.md 构建并 source 工作区 install/setup.bash')
     if len(enabled) > 1 and any(not str(c.get('serial_no', '')) for c in enabled):
         raise RuntimeError('every enabled RealSense needs a serial_no when launching multiple cameras')
     actions = []
@@ -136,8 +147,13 @@ def _launch(context):
         actions.append(Node(package='humanoid_camera', executable='timestamp_adapter.py',
                             name=name + '_timestamp_adapter', namespace=namespace,
                             parameters=[{'source_id': ParameterValue(ident, value_type=str),
+                                         'device_type': ParameterValue(camera['device_type'], value_type=str),
                                          'config_file': ParameterValue(str(config_path), value_type=str),
                                          'source_depth_format': parameters['depth_module.depth_format'],
+                                         'depth_enabled': camera.get('depth_enabled', True),
+                                         'sdk_sync': parameters['enable_sync'],
+                                         'pair_max_skew_ms': float(camera.get('rgbd_max_midpoint_skew_ms', 2)),
+                                         'bundled_input': True,
                                          'driver_prefix': ParameterValue(prefix, value_type=str)}],
                             remappings=image_remappings + [('normalized/' + suffix, camera[key]) for key, suffix in (
                                 ('rgbd_topic', 'rgbd'), ('metadata_topic', 'metadata'),

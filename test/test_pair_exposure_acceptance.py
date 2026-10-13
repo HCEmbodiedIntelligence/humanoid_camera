@@ -9,8 +9,8 @@ from humanoid_camera.health_check import CameraCheck, expected_parameters
 from humanoid_camera.health_report import assemble, console_report, write_report
 
 
-def observe(exposures, *, require_equal=True, skew_us=100):
-    camera = validate_cameras([{'id': 'front', 'device_type': 'd405'}])[0]
+def observe(exposures, *, require_equal=True, skew_us=100, limit_ms=1):
+    camera = validate_cameras([{'id': 'front', 'device_type': 'd405', 'rgbd_max_midpoint_skew_ms': limit_ms}])[0]
     check = CameraCheck(camera, verify_images=True, require_equal_exposure=require_equal)
     for index in range(60):
         header = 1_780_000_000_000_000_000 + index * 33_333_333
@@ -109,3 +109,10 @@ def test_strict_report_preserves_duration_difference_and_midpoint_difference(tmp
     assert len(rows) == 60
     assert all(float(row['exposure_difference_us']) == 1000 for row in rows)
     assert all(float(row['skew_ms']) == .1 for row in rows)
+
+
+@pytest.mark.parametrize('skew,expected', [(1949, 'PASS'), (2000, 'PASS'), (2001, 'FAIL')])
+def test_configured_two_ms_health_threshold_includes_boundary(skew, expected):
+    report = observe([(3900, 3900)], skew_us=skew, limit_ms=2)
+    assert report['status'] == expected
+    assert report['cameras'][0]['metrics']['rgb_depth_midpoint_skew_ms']['max'] == skew/1000

@@ -82,7 +82,7 @@ D435 默认启用 `depth_auto_gain` 与 `color_auto_gain`，由 `camera_gain_con
 例如 `backend: vendor_camera` 可同时声明 `instance_parameters`、ROS launch 步骤、
 `rgbd_topic` 与 `metadata_topic`；变量写作 `${name}`。不声明 startup 时连接外部已有话题。
 RealSense 兼容配置独立在 `realsense_camera.launch.py` 和 `realsense_profile.py` 中；
-使用该 profile 时请安装 `realsense2_camera` 和 `realsense2_camera_msgs`，通用相机包不再强制依赖它们。
+托管 RealSense 录制需要构建 `realsense2_camera` / `realsense2_camera_msgs` 的原子消息补丁，见 [构建与传输说明](docs/atomic_capture.md)。通用相机包不强制依赖它们。
 
 ## 相机权限与重复错误
 

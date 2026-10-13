@@ -40,7 +40,7 @@ def test_gain_feedback_has_independent_direction_deadband_steps_and_limits():
         next_gain(64, 10, 16, 10)
 
 
-def test_legacy_d435_loads_paired_manual_exposure_without_mutating_d405():
+def test_legacy_d435_loads_manual_exposure_and_preserves_explicit_sync_choice():
     cameras = validate_cameras([
         {'id': 'head', 'device_type': 'd435', 'serial_no': '435',
          'depth_auto_exposure': True, 'depth_exposure_us': 4500, 'color_exposure_us': 4500,
@@ -50,7 +50,7 @@ def test_legacy_d435_loads_paired_manual_exposure_without_mutating_d405():
     assert head['depth_exposure_us'] == head['color_exposure_us'] == 3900
     assert head['depth_auto_exposure'] is head['color_auto_exposure'] is False
     assert head['depth_auto_gain'] is head['color_auto_gain'] is True
-    assert head['sync_rgb_depth'] is True
+    assert head['sync_rgb_depth'] is False
     assert left['depth_auto_exposure'] is True
     assert left['depth_auto_gain'] is False
 

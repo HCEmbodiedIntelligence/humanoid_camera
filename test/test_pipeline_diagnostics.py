@@ -43,7 +43,8 @@ def test_rates_use_the_producer_window_and_restart_starts_a_new_window():
 
 
 @pytest.mark.parametrize('verified_source', [False, True])
-def test_adapter_reports_missing_rgb_on_eviction_and_preserves_complete_pair(verified_source):
+@pytest.mark.parametrize('model,missing_exposure', [('d405',False),('d435',False),('d435',True)])
+def test_adapter_reports_missing_rgb_on_eviction_and_preserves_complete_pair(verified_source,model,missing_exposure):
     pytest.importorskip('rclpy')
     from sensor_msgs.msg import Image
     from realsense2_camera_msgs.msg import Metadata
@@ -54,7 +55,7 @@ def test_adapter_reports_missing_rgb_on_eviction_and_preserves_complete_pair(ver
     spec.loader.exec_module(adapter)
     stats = PipelineDiagnostics('front', 'test-instance')
     images, metadata = [], []
-    node = Obj(source='front', limit=64*1024*1024, pending=OrderedDict(), lineage=OrderedDict(), infos={},
+    node = Obj(source='front', device_type=model, limit=64*1024*1024, pending=OrderedDict(), lineage=OrderedDict(), infos={},
                cloud_pending=OrderedDict(), cloud_bytes=0, cloud_limit=16*1024*1024,
                bytes=0, seq=0, epoch=0, last_sensor=None, clock_id='test-instance', config_id='TEST_ONLY',
                diagnostics=stats, get_clock=lambda: Obj(now=lambda: Obj(nanoseconds=1_780_000_000_100_000_000)),
@@ -70,9 +71,12 @@ def test_adapter_reports_missing_rgb_on_eviction_and_preserves_complete_pair(ver
         raw = {'clock_domain': 'global_time', 'frame_timestamp': str(h.stamp.sec * 1000),
                'sensor_timestamp': 100000 + index*33333, 'hw_timestamp': 102000 + index*33333,
                'frame_number': index, 'actual_exposure': 4000}
+        color = {**raw,'actual_exposure':40 if model=='d435' else 4000,
+                 'sensor_timestamp':raw['hw_timestamp']-1}
+        if missing_exposure:color.pop('actual_exposure')
         return {'rgb': Image(header=h, width=1, height=1, encoding='rgb8', step=3, data=b'\x01\x02\x03'),
                 'depth': Image(header=h, width=1, height=1, encoding='16UC1', step=2, data=b'\x04\x00'),
-                'rgb_meta': Metadata(header=h, json_data=json.dumps(raw)),
+                'rgb_meta': Metadata(header=h, json_data=json.dumps(color)),
                 'depth_meta': Metadata(header=h, json_data=json.dumps(raw))}
 
     for index in range(40):
@@ -94,6 +98,12 @@ def test_adapter_reports_missing_rgb_on_eviction_and_preserves_complete_pair(ver
     produced = json.loads(metadata[0].json_data)
     raw = json.loads(pair['rgb_meta'].json_data)
     assert produced['rgb']['raw_metadata'] == raw
+    assert produced['rgb']['actual_exposure_us'] == (None if missing_exposure else 4000)
+    assert produced['valid'] is (not missing_exposure)
+    assert produced['rgb']['capture_time_ns']-produced['depth']['capture_time_ns'] == 1_999_000
+    assert produced['depth']['actual_exposure_us'] == 4000
+    assert produced['exposure_validation'] == 'metadata'
+    assert produced['rgb']['clock_uncertainty_ns'] is None
     assert produced['depth']['source_profile'] == node.depth_source_profile
     assert produced['depth']['depth_scale'] == (.001 if verified_source else None)
     assert produced['depth']['encoding'] == '16UC1'
@@ -124,3 +134,52 @@ def test_cloud_backlog_cannot_evict_incomplete_rgbd_groups():
     assert len(node.cloud_pending) == 2 and node.cloud_bytes == 16
     assert stats.discarded['cloud_buffer_limit'] == 18
     assert not stats.missing
+
+
+def test_rgb_only_publishes_without_waiting_for_depth_and_keeps_exposure():
+    pytest.importorskip('rclpy')
+    from sensor_msgs.msg import Image
+    from realsense2_camera_msgs.msg import Metadata
+    from std_msgs.msg import Header
+    path = Path(__file__).resolve().parents[1] / 'scripts/timestamp_adapter.py'
+    spec = importlib.util.spec_from_file_location('rgb_only_adapter', path)
+    adapter = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(adapter)
+    images, metadata = [], []
+    node = Obj(source='head', device_type='d435', depth_enabled=False,
+               limit=64*1024*1024, pending=OrderedDict(), lineage=OrderedDict(), infos={},
+               cloud_pending=OrderedDict(), cloud_bytes=0, bytes=0, seq=0, epoch=0,
+               last_sensor=None, clock_id='test', config_id='test',
+               diagnostics=PipelineDiagnostics('head','test'),
+               get_clock=lambda: Obj(now=lambda: Obj(nanoseconds=1_780_000_000_100_000_000)),
+               pair_pub=Obj(publish=images.append), meta_pub=Obj(publish=metadata.append))
+    h=Header();h.stamp.sec=1_780_000_000
+    raw={'clock_domain':'global_time','frame_timestamp':'1780000000000',
+         'sensor_timestamp':99999,'hw_timestamp':100000,'frame_number':42,'actual_exposure':18}
+    adapter.TimestampAdapter.receive(node,'rgb_meta',Metadata(header=h,json_data=json.dumps(raw)))
+    assert not images
+    adapter.TimestampAdapter.receive(node,'rgb',Image(header=h,width=1,height=1,encoding='rgb8',step=3,data=b'\x01\x02\x03'))
+    assert len(images)==1 and bytes(images[0].rgb.data)==b'\x01\x02\x03'
+    assert not images[0].depth.data and not node.pending and node.bytes==0
+    data=json.loads(metadata[0].json_data)
+    assert 'depth' not in data and data['depth_enabled'] is False
+    assert data['rgb']['actual_exposure_us']==1800
+    assert data['rgb']['source_seq']==42
+    assert adapter.ns(images[0].header)==adapter.midpoint(raw)[0]
+
+
+def test_rgb_only_driver_cannot_reenable_depth_via_advanced_parameters():
+    pytest.importorskip('launch_ros')
+    path=Path(__file__).resolve().parents[1]/'launch/realsense_camera.launch.py'
+    spec=importlib.util.spec_from_file_location('rgb_only_launch',path)
+    launch=importlib.util.module_from_spec(spec);spec.loader.exec_module(launch)
+    camera=validate_cameras([{'id':'head','device_type':'d435','depth_enabled':False,
+        'parameters':{'enable_depth':True,'enable_infra1':True,'pointcloud':{'enable':True}}}])[0]
+    params=launch._parameters(camera)
+    assert not camera['depth_auto_gain'] and not camera['sync_rgb_depth']
+    for key in ('enable_depth','enable_sync','enable_infra1','enable_infra2','pointcloud.enable','align_depth.enable'):
+        assert params[key] is False
+    assert params['enable_color'] is True
+    from humanoid_manager.deployment import DeploymentError
+    with pytest.raises(DeploymentError, match='关闭深度'):
+        validate_cameras([{'id':'head','depth_enabled':False,'pointcloud':True}])

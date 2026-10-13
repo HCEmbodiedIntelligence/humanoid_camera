@@ -24,6 +24,7 @@ def generate_launch_description():
         DeclareLaunchArgument('normalize_timestamps',default_value='true'),
         Node(package='humanoid_camera',executable='timestamp_adapter.py',namespace=LaunchConfiguration('namespace'),
             parameters=[{'source_id':LaunchConfiguration('namespace'),'config_file':LaunchConfiguration('params_file'),
+                'device_type':'d405',
                 'driver_prefix':PathJoinSubstitution(['/',LaunchConfiguration('namespace'),LaunchConfiguration('camera_name')])}],
             condition=IfCondition(LaunchConfiguration('normalize_timestamps')),output='screen'),
         Node(prefix=[shlex.quote(sys.executable) + ' -m humanoid_camera.permission_guard'], package='realsense2_camera',executable='realsense2_camera_node',

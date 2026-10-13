@@ -4,7 +4,7 @@ from decimal import Decimal
 import json
 import math
 from .exposure import rgb_exposure_parameter, metadata_exposure_us, metadata_exposure_scale_us
-from .depth_processing import DEPTH_FILTER_PARAMETERS
+from .depth_processing import DEPTH_FILTER_PARAMETERS, acquisition_filters
 from .pipeline_diagnostics import summarize_window
 from .driver_qos import driver_qos_parameters
 from .driver_streams import infrared_parameters
@@ -54,7 +54,9 @@ def expected_parameters(camera):
                                              if stem == 'color' else exposure)
             if not camera.get(stem + '_auto_gain', False):
                 result[prefix + '.gain'] = camera[stem + '_gain']
-    return result
+    if not camera.get('depth_enabled', True):
+        result.update(enable_depth=False, enable_sync=False, enable_infra1=False, enable_infra2=False)
+    return acquisition_filters(result, sdk_sync=result['enable_sync'])
 
 
 class Metric:

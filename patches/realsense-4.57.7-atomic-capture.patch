@@ -1,0 +1,225 @@
+diff --git a/realsense2_camera/CMakeLists.txt b/realsense2_camera/CMakeLists.txt
+index 253b141..682ab2e 100644
+--- a/realsense2_camera/CMakeLists.txt
++++ b/realsense2_camera/CMakeLists.txt
+@@ -462,6 +462,7 @@ if(BUILD_TESTING)
+ endif()
+ 
+ # Ament exports
++install(FILES atomic_capture_v1 DESTINATION share/${PROJECT_NAME})
+ ament_export_include_directories(include)
+ ament_export_libraries(${PROJECT_NAME})
+ ament_export_dependencies(${dependencies})
+diff --git a/realsense2_camera/include/base_realsense_node.h b/realsense2_camera/include/base_realsense_node.h
+index 09f82ae..83d4e3d 100755
+--- a/realsense2_camera/include/base_realsense_node.h
++++ b/realsense2_camera/include/base_realsense_node.h
+@@ -32,6 +32,7 @@
+ #include "realsense2_camera_msgs/msg/extrinsics.hpp"
+ #include "realsense2_camera_msgs/msg/metadata.hpp"
+ #include "realsense2_camera_msgs/msg/rgbd.hpp"
++#include "realsense2_camera_msgs/msg/image_metadata.hpp"
+ #include "realsense2_camera_msgs/srv/device_info.hpp"
+ #include "realsense2_camera_msgs/srv/calib_config_read.hpp"
+ #include "realsense2_camera_msgs/srv/calib_config_write.hpp"
+@@ -313,6 +314,7 @@ namespace realsense2_camera
+             const rclcpp::Time& t);
+ 
+         void publishMetadata(rs2::frame f, const rclcpp::Time& header_time, const std::string& frame_id);
++        std::string frameMetadataJson(const rs2::frame& f) const;
+ 
+         sensor_msgs::msg::Imu CreateUnitedMessage(const CimuData accel_data, const CimuData gyro_data);
+ 
+@@ -377,6 +379,7 @@ namespace realsense2_camera
+         std::shared_ptr<SyncedImuPublisher> _synced_imu_publisher;
+         std::map<stream_index_pair, rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr> _info_publishers;
+         std::map<stream_index_pair, rclcpp::Publisher<realsense2_camera_msgs::msg::Metadata>::SharedPtr> _metadata_publishers;
++        std::map<stream_index_pair, rclcpp::Publisher<realsense2_camera_msgs::msg::ImageMetadata>::SharedPtr> _image_metadata_publishers;
+         std::map<stream_index_pair, rclcpp::Publisher<IMUInfo>::SharedPtr> _imu_info_publishers;
+         std::map<stream_index_pair, rclcpp::Publisher<Extrinsics>::SharedPtr> _extrinsics_publishers;
+         rclcpp::Publisher<realsense2_camera_msgs::msg::RGBD>::SharedPtr _rgbd_publisher;
+diff --git a/realsense2_camera/src/base_realsense_node.cpp b/realsense2_camera/src/base_realsense_node.cpp
+index 5c85196..e3aac49 100755
+--- a/realsense2_camera/src/base_realsense_node.cpp
++++ b/realsense2_camera/src/base_realsense_node.cpp
+@@ -1174,7 +1174,12 @@ void BaseRealSenseNode::publishFrame(
+         return;
+     }
+ 
+-    // Publish stream image
++    const auto bundled_it = _image_metadata_publishers.find(stream);
++    const bool bundled = is_publishMetadata && bundled_it != _image_metadata_publishers.end()
++        && bundled_it->second->get_subscription_count() != 0;
++
++    // Publish stream image. The bundle is made from this exact SDK frame, so
++    // image/metadata delivery cannot diverge across independent DDS histories.
+     if (image_publishers.find(stream) != image_publishers.end())
+     {
+         auto &image_publisher = image_publishers.at(stream);
+@@ -1191,7 +1196,7 @@ void BaseRealSenseNode::publishFrame(
+ 
+         // if depth/color has subscribers, ask first if rgbd already fetched
+         // the images from the frame. if not, fetch the relevant color/depth image.
+-        if (0 != image_publisher->get_subscription_count())
++        if (bundled || 0 != image_publisher->get_subscription_count())
+         {
+             if (image_cv_matrix.empty() && fillCVMatImageAndReturnStatus(f, images, width, height, stream))
+             {
+@@ -1209,10 +1214,24 @@ void BaseRealSenseNode::publishFrame(
+ 
+             if (fillROSImageMsgAndReturnStatus(image_cv_matrix, stream, width, height, stream_format, t, img_msg_ptr.get()))
+             {
+-
++                if (bundled)
++                {
++                    if (_camera_info.at(stream).width != width || _camera_info.at(stream).height != height)
++                        updateStreamCalibData(f.get_profile().as<rs2::video_stream_profile>());
++                    auto packet = std::make_unique<realsense2_camera_msgs::msg::ImageMetadata>();
++                    packet->camera_info = _camera_info.at(stream);
++                    packet->camera_info.header = img_msg_ptr->header;
++                    packet->json_data = frameMetadataJson(f);
++                    if (image_publisher->get_subscription_count() == 0)
++                        packet->image = std::move(*img_msg_ptr);
++                    else
++                        packet->image = *img_msg_ptr;
++                    bundled_it->second->publish(std::move(packet));
++                }
+                 // Transfer the unique pointer ownership to the RMW
+                 sensor_msgs::msg::Image *msg_address = img_msg_ptr.get();
+-                image_publisher->publish(std::move(img_msg_ptr));
++                if (!bundled || !img_msg_ptr->data.empty())
++                    image_publisher->publish(std::move(img_msg_ptr));
+ 
+                 ROS_DEBUG_STREAM(rs2_stream_to_string(f.get_profile().stream_type()) << " stream published, message address: " << std::hex << msg_address);
+             }
+@@ -1331,33 +1350,38 @@ void BaseRealSenseNode::publishMetadata(rs2::frame f, const rclcpp::Time& header
+             realsense2_camera_msgs::msg::Metadata msg;
+             msg.header.frame_id = frame_id;
+             msg.header.stamp = header_time;
+-            std::stringstream json_data;
+-            const char* separator = ",";
+-            json_data << "{";
+-            // Add additional fields:
+-            json_data << "\"" << "frame_number" << "\":" << f.get_frame_number();
+-            json_data << separator << "\"" << "clock_domain" << "\":" << "\"" << create_graph_resource_name(rs2_timestamp_domain_to_string(f.get_frame_timestamp_domain())) << "\"";
+-            json_data << separator << "\"" << "frame_timestamp" << "\":" << std::fixed << f.get_timestamp();
+-
+-            for (auto i = 0; i < RS2_FRAME_METADATA_COUNT; i++)
++            msg.json_data = frameMetadataJson(f);
++            md_publisher->publish(msg);
++        }
++    }
++}
++
++std::string BaseRealSenseNode::frameMetadataJson(const rs2::frame& f) const
++{
++    std::stringstream json_data;
++    const char* separator = ",";
++    json_data << "{";
++    // Add additional fields:
++    json_data << "\"" << "frame_number" << "\":" << f.get_frame_number();
++    json_data << separator << "\"" << "clock_domain" << "\":" << "\"" << create_graph_resource_name(rs2_timestamp_domain_to_string(f.get_frame_timestamp_domain())) << "\"";
++    json_data << separator << "\"" << "frame_timestamp" << "\":" << std::fixed << f.get_timestamp();
++
++    for (auto i = 0; i < RS2_FRAME_METADATA_COUNT; i++)
++    {
++        if (f.supports_frame_metadata((rs2_frame_metadata_value)i))
++        {
++            rs2_frame_metadata_value mparam = (rs2_frame_metadata_value)i;
++            std::string name = create_graph_resource_name(rs2_frame_metadata_to_string(mparam));
++            if (RS2_FRAME_METADATA_FRAME_TIMESTAMP == i)
+             {
+-                if (f.supports_frame_metadata((rs2_frame_metadata_value)i))
+-                {
+-                    rs2_frame_metadata_value mparam = (rs2_frame_metadata_value)i;
+-                    std::string name = create_graph_resource_name(rs2_frame_metadata_to_string(mparam));
+-                    if (RS2_FRAME_METADATA_FRAME_TIMESTAMP == i)
+-                    {
+-                        name = "hw_timestamp";
+-                    }
+-                    rs2_metadata_type val = f.get_frame_metadata(mparam);
+-                    json_data << separator << "\"" << name << "\":" << val;
+-                }
++                name = "hw_timestamp";
+             }
+-            json_data << "}";
+-            msg.json_data = json_data.str();
+-            md_publisher->publish(msg);
++            rs2_metadata_type val = f.get_frame_metadata(mparam);
++            json_data << separator << "\"" << name << "\":" << val;
+         }
+     }
++    json_data << "}";
++    return json_data.str();
+ }
+ 
+ void BaseRealSenseNode::startDiagnosticsUpdater()
+diff --git a/realsense2_camera/src/rs_node_setup.cpp b/realsense2_camera/src/rs_node_setup.cpp
+index 2103ad9..d72b089 100755
+--- a/realsense2_camera/src/rs_node_setup.cpp
++++ b/realsense2_camera/src/rs_node_setup.cpp
+@@ -222,6 +222,7 @@ void BaseRealSenseNode::stopPublishers(const std::vector<stream_profile>& profil
+             _imu_info_publishers.erase(sip);
+         }
+         _metadata_publishers.erase(sip);
++        _image_metadata_publishers.erase(sip);
+         _extrinsics_publishers.erase(sip);
+ 
+         if (_publish_tf)
+@@ -279,6 +280,14 @@ void BaseRealSenseNode::startPublishers(const std::vector<stream_profile>& profi
+                 image_raw << "~/" << stream_name << "/image_" << ((rectified_image)?"rect_":"") << "raw";
+                 camera_info << "~/" << stream_name << "/camera_info";
+ 
++                // The SDK frame owns both pixels and metadata. Keep them in one
++                // DDS sample instead of independently dropping either channel.
++                if (sip == COLOR || sip == DEPTH)
++                {
++                    _image_metadata_publishers[sip] = _node.create_publisher<realsense2_camera_msgs::msg::ImageMetadata>(
++                        "~/" + stream_name + "/image_metadata", rclcpp::QoS(10).reliable());
++                }
++
+ 
+                 // We can use 2 types of publishers:
+                 // 1. Native RCL publisher (supports intra-process zero-copy communication)
+diff --git a/realsense2_camera_msgs/CMakeLists.txt b/realsense2_camera_msgs/CMakeLists.txt
+index 0fb41db..3ed1250 100644
+--- a/realsense2_camera_msgs/CMakeLists.txt
++++ b/realsense2_camera_msgs/CMakeLists.txt
+@@ -39,6 +39,8 @@ set(msg_files
+   "msg/Extrinsics.msg"
+   "msg/Metadata.msg"
+   "msg/RGBD.msg"
++  "msg/ImageMetadata.msg"
++  "msg/RGBDMetadata.msg"
+ )
+ rosidl_generate_interfaces(${PROJECT_NAME}
+   ${msg_files}
+diff --git a/realsense2_camera/atomic_capture_v1 b/realsense2_camera/atomic_capture_v1
+new file mode 100644
+index 0000000..48a6958
+--- /dev/null
++++ b/realsense2_camera/atomic_capture_v1
+@@ -0,0 +1,2 @@
++humanoid-camera atomic SDK frame transport v1
++Upstream: realsense-ros 4.57.7 (5c2244ca5cd9867c9ee63769668891430f460dfd)
+diff --git a/realsense2_camera_msgs/msg/ImageMetadata.msg b/realsense2_camera_msgs/msg/ImageMetadata.msg
+new file mode 100644
+index 0000000..69dbcd9
+--- /dev/null
++++ b/realsense2_camera_msgs/msg/ImageMetadata.msg
+@@ -0,0 +1,5 @@
++# One SDK video frame and its metadata; no receiver-side image/metadata join.
++# image.header is the original driver/frameset header, never an inferred exposure.
++sensor_msgs/Image image
++sensor_msgs/CameraInfo camera_info
++string json_data
+diff --git a/realsense2_camera_msgs/msg/RGBDMetadata.msg b/realsense2_camera_msgs/msg/RGBDMetadata.msg
+new file mode 100644
+index 0000000..26b1dee
+--- /dev/null
++++ b/realsense2_camera_msgs/msg/RGBDMetadata.msg
+@@ -0,0 +1,4 @@
++# A normalized RGB(D) sample and its provenance transported atomically.
++# For an RGB-only camera rgbd.depth is empty and json_data declares depth_enabled=false.
++realsense2_camera_msgs/RGBD rgbd
++string json_data

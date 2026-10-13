@@ -101,7 +101,6 @@ def validate_cameras(value):
                 camera['depth_exposure_us'] = camera['color_exposure_us'] = D435_EXPOSURE_US
             camera['depth_auto_exposure'] = False
             camera['color_auto_exposure'] = False
-            camera['sync_rgb_depth'] = True
         elif camera['depth_auto_gain'] or camera['color_auto_gain']:
             raise DeploymentError(f'{ident}: 程序自动增益目前只支持 D435 系列')
         for key, low, high in (("width", 1, 8192), ("height", 1, 8192), ("fps", 1, 240),
@@ -128,7 +127,8 @@ def validate_cameras(value):
         if not isinstance(camera["parameters"], dict):
             raise DeploymentError(f"{ident}.parameters 必须为对象")
         validate_values(camera["parameters"], f"/cameras/{ident}/parameters")
-        camera['parameters'] = acquisition_filters(camera['parameters'])
+        camera['parameters'] = acquisition_filters(camera['parameters'],
+            sdk_sync=camera['sync_rgb_depth'] and camera.get('depth_enabled', True))
         if camera['device_type'].lower() in D435_RGB_MODELS:
             for group in ('rgb_camera', 'depth_module'):
                 for leaf in ('enable_auto_exposure', 'exposure', 'gain'):
