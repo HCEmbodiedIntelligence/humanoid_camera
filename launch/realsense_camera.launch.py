@@ -11,7 +11,7 @@ from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
-from humanoid_manager.plugin_metadata import resolved_document
+from humanoid_camera.settings import resolved_document
 from humanoid_camera.exposure import D435_RGB_MODELS, rgb_exposure_parameter, override_driver_parameters
 from humanoid_camera.depth_processing import acquisition_filters
 from humanoid_camera.driver_qos import driver_qos_parameters

@@ -180,6 +180,6 @@ def test_rgb_only_driver_cannot_reenable_depth_via_advanced_parameters():
     for key in ('enable_depth','enable_sync','enable_infra1','enable_infra2','pointcloud.enable','align_depth.enable'):
         assert params[key] is False
     assert params['enable_color'] is True
-    from humanoid_manager.deployment import DeploymentError
+    from humanoid_camera.errors import CameraConfigurationError as DeploymentError
     with pytest.raises(DeploymentError, match='关闭深度'):
         validate_cameras([{'id':'head','depth_enabled':False,'pointcloud':True}])

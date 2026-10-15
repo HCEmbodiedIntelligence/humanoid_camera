@@ -181,7 +181,7 @@ def main():
     try:
         import yaml
         from humanoid_camera.configuration import validate_cameras
-        from humanoid_manager.plugin_metadata import resolved_document
+        from humanoid_camera.settings import resolved_document
         document = yaml.safe_load(args.config.expanduser().read_text())
         if not isinstance(document, dict) or document.get('schema_version') != 1:
             raise ValueError('配置必须包含 schema_version: 1 和 cameras 列表')

@@ -2,8 +2,8 @@
 import copy
 import math
 import re
-from humanoid_manager.deployment import DeploymentError
-from humanoid_manager.plugin_metadata import validate_settings, resolved_document
+from humanoid_camera.errors import CameraConfigurationError as DeploymentError
+from humanoid_camera.settings import validate_settings, resolved_document
 from .identity import normalize_camera_identity
 
 

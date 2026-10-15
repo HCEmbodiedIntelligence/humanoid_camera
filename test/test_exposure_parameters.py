@@ -8,7 +8,7 @@ import yaml
 from humanoid_camera.configuration import validate_cameras
 from humanoid_camera.exposure import rgb_exposure_parameter
 from humanoid_camera.health_check import expected_parameters
-from humanoid_manager.deployment import DeploymentError
+from humanoid_camera.errors import CameraConfigurationError as DeploymentError
 
 
 @pytest.fixture

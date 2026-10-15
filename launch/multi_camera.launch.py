@@ -8,8 +8,8 @@ from launch.substitutions import LaunchConfiguration
 from ament_index_python.packages import get_package_share_directory
 from humanoid_camera.configuration import validate_cameras
 from humanoid_camera.profiles import LAUNCH_FILES
-from humanoid_manager.plugin_metadata import resolved_document
-from humanoid_manager.plugin_startup import startup_actions
+from humanoid_camera.settings import resolved_document
+from robot_bringup.startup import startup_actions
 
 
 def _launch(context):

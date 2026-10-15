@@ -6,7 +6,7 @@ import pytest
 
 from humanoid_camera.configuration import validate_cameras
 from humanoid_camera.realsense_profile import validate_cameras as validate_realsense
-from humanoid_manager.deployment import DeploymentError
+from humanoid_camera.errors import CameraConfigurationError as DeploymentError
 
 
 @pytest.fixture(params=[validate_cameras, validate_realsense])

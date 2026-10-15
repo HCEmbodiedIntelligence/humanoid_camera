@@ -2,8 +2,8 @@
 import copy
 import math
 import re
-from humanoid_manager.deployment import DeploymentError
-from humanoid_manager.configuration import validate_values
+from humanoid_camera.errors import CameraConfigurationError as DeploymentError
+from humanoid_camera.validation import validate_values
 from .identity import normalize_camera_identity
 from .exposure import D435_RGB_MODELS, D435_EXPOSURE_US, rgb_exposure_parameter
 from .depth_processing import acquisition_filters

@@ -2,7 +2,7 @@
 import json
 import re
 
-from humanoid_manager.deployment import DeploymentError
+from humanoid_camera.errors import CameraConfigurationError as DeploymentError
 
 
 def normalize_camera_identity(camera, index, identifiers):
