@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 camera_package_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-if [ -f "$camera_package_dir/../../install/setup.bash" ]; then
+if [ -f "$camera_package_dir/../../setup_hc.bash" ]; then
+  source "$camera_package_dir/../../setup_hc.bash"
+elif [ -f "$camera_package_dir/../../install/setup.bash" ]; then
   source "$camera_package_dir/../../install/setup.bash"
 elif [ -f "$camera_package_dir/../../../setup.bash" ]; then
   source "$camera_package_dir/../../../setup.bash"
 fi
-camera_overlay="$HOME/.local/share/humanoid-camera/ros-overlay/opt/ros/humble"
-if [ -f "$camera_overlay/share/realsense2_camera/package.xml" ]; then
-  export AMENT_PREFIX_PATH="$camera_overlay:${AMENT_PREFIX_PATH:-}"
-  export LD_LIBRARY_PATH="$camera_overlay/lib:$camera_overlay/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
+if [[ $# == 0 || "${1:-}" == --help || "${1:-}" == -h ]]; then
+  echo 'Usage: start_cameras.sh /path/to/robot-profile/cameras.yaml [launch arguments]'
+  echo 'For HC use: bash tools/run_cameras.sh --profile adapters/robots/openarmx'
+  [[ $# != 0 ]] && exit 0
+  exit 2
 fi
-default_config="$(ros2 pkg prefix --share humanoid_camera)/config/three-camera.example.yaml"
-config=${1:-"$default_config"}
-shift || true
+config=$1
+[[ -f "$config" ]] || { echo "Camera config not found: $config" >&2; exit 2; }
+shift
 exec ros2 launch humanoid_camera multi_camera.launch.py camera_config:="$config" "$@"

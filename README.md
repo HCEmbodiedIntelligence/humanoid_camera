@@ -24,27 +24,19 @@
 
 标准化点云或点云元数据有下游订阅者时，适配器才订阅原始点云，发现周期约 1 秒；停止订阅后释放点云缓存。点云等待配对使用独立缓存（最多 4 帧及 16 MiB，且不超过配置内存上限），避免淘汰 RGBD 等待组。不改变相机的点云开关、分辨率、帧率、曝光或滤波配置。更新后需同时重启相机适配进程及管理器录制进程。
 
-```bash
-ROS_DOMAIN_ID=14 ./src/humanoid_camera/start_camera.sh
-```
-
-或在已配置 ROS 环境时：
+HC/OpenArmX 统一从机器人 profile 启动，在 `HC-teleop-robotic` 目录执行：
 
 ```bash
-ros2 launch humanoid_camera d405.launch.py namespace:=front
+bash tools/run_cameras.sh --profile adapters/robots/openarmx
 ```
 
-单台 D435：
+该入口使用 profile 内的 `cameras.yaml`，与中间件预览、录制使用同一设备清单。
+底层通用入口为 `start_cameras.sh /明确路径/cameras.yaml`；`start_camera.sh`
+仅转发到它，不再默认启动单台 D405。无参数不会加载带占位序列号的示例文件，
+也不再自动叠加用户目录中的旧驱动 overlay。优先使用 `setup_hc.bash` 的合并安装。
 
-```bash
-ros2 launch humanoid_camera d435.launch.py namespace:=right serial_no:=你的序列号
-```
-
-三台相机（先替换示例文件中的三个序列号）：
-
-```bash
-./src/humanoid_camera/start_cameras.sh ./src/humanoid_camera/config/three-camera.example.yaml
-```
+`three-camera.example.yaml` 仅供新设备填写参考；`d405.launch.py`、`d435.launch.py`
+及其参数文件保留给已有单机诊断测试，不参与 OpenArmX 日常启动。
 
 `multi_camera.launch.py` 接受管理器部署在机器人内部配置目录中的 `cameras.yaml`。同时启用多台 RealSense 时每台必须填写唯一序列号。型号字段不会限制为 D405/D435；设备不支持的能力需要在真机启动时处理。
 
